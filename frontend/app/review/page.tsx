@@ -4,6 +4,7 @@ import { supabase } from "../../supabase";
 import ReactMarkdown from "react-markdown";
 import { CheckCircle, XCircle, Calendar, Loader2, Trophy, Eye, Award } from "lucide-react";
 
+// 复习间隔 (天数)
 const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
 
 type Note = {
@@ -18,8 +19,8 @@ type Note = {
 export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [isFlipped, setIsFlipped] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0); // 当前第几题
+  const [isFlipped, setIsFlipped] = useState(false); // 是否翻牌
 
   useEffect(() => {
     const fetchDueNotes = async () => {
@@ -32,8 +33,8 @@ export default function ReviewPage() {
         .from("notes")
         .select("*")
         .eq("user_id", session.user.id)
-        .eq("is_mastered", false) // 👈 关键：只查“未掌握”的题
-        .lte("next_review_at", now)
+        .eq("is_mastered", false) // 只查未掌握的
+        .lte("next_review_at", now) // 查“到期”的
         .order("next_review_at", { ascending: true })
         .limit(50);
 
@@ -43,53 +44,64 @@ export default function ReviewPage() {
     fetchDueNotes();
   }, []);
 
-  // 处理复习结果
   const handleReview = async (result: "forgot" | "remembered" | "mastered") => {
     const currentNote = notes[currentIndex];
     if (!currentNote) return;
 
     let newStage = currentNote.review_stage;
-    let nextDate = new Date();
-    let isMastered = false; // 默认不掌握
+    let nextDate = new Date(); // 获取当前时间
+    let isMastered = false;
 
     if (result === "mastered") {
-      // 😎 已掌握：标记为 true，下次复习时间其实无所谓了，设为很久以后也行
+      // 😎 已掌握：踢出复习队列
       isMastered = true;
-      // 为了数据好看，我们可以把下次复习时间设为 100 年后
       nextDate.setFullYear(nextDate.getFullYear() + 100); 
     } else if (result === "remembered") {
-      // ✅ 记得
+      // ✅ 记得：计算间隔天数
       const intervalDays = REVIEW_INTERVALS[newStage] || 60;
       nextDate.setDate(nextDate.getDate() + intervalDays);
+      
+      // ✨✨✨ 核心修改：将时间强制设为当天的凌晨 04:00:00 ✨✨✨
+      // 这样就实现了“按天刷新”，而不是“按24小时滚动刷新”
+      nextDate.setHours(4, 0, 0, 0); 
+      
       newStage += 1;
     } else {
-      // ❌ 忘了
+      // ❌ 忘了：明天复习
       nextDate.setDate(nextDate.getDate() + 1);
+      
+      // ✨✨✨ 核心修改：同样设为明天凌晨 04:00:00 ✨✨✨
+      nextDate.setHours(4, 0, 0, 0);
+      
       newStage = 0;
     }
 
-    // 乐观更新 UI
+    // 1. 乐观更新 UI (立即切下一题)
     const nextIndex = currentIndex + 1;
     setCurrentIndex(nextIndex);
     setIsFlipped(false);
 
-    // 更新数据库
+    // 2. 异步更新数据库
     await supabase
       .from("notes")
       .update({
         review_stage: newStage,
         next_review_at: nextDate.toISOString(),
-        is_mastered: isMastered // 👈 写入数据库
+        is_mastered: isMastered
       })
       .eq("id", currentNote.id);
 
+    // 撒花特效
     if (nextIndex >= notes.length && typeof window !== "undefined" && (window as any).confetti) {
       (window as any).confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
     }
   };
 
+  // --- 渲染部分 ---
+
   if (loading) return <div className="flex h-[80vh] items-center justify-center text-blue-600"><Loader2 size={40} className="animate-spin" /></div>;
 
+  // 场景：没有待复习的题
   if (notes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
@@ -97,12 +109,13 @@ export default function ReviewPage() {
             <Trophy size={64} className="text-green-600" />
         </div>
         <h2 className="text-2xl font-bold text-gray-800 mb-2">太棒了！今日任务已清空</h2>
-        <p className="text-gray-500 max-w-md">所有错题都已复习完毕。</p>
+        <p className="text-gray-500 max-w-md">所有到期的错题都已复习完毕。</p>
         <a href="/" className="mt-8 px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition">去上传新题</a>
       </div>
     );
   }
 
+  // 场景：复习完成
   if (currentIndex >= notes.length) {
     return (
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
@@ -120,6 +133,8 @@ export default function ReviewPage() {
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 h-[calc(100vh-80px)] flex flex-col">
+      
+      {/* 进度条 */}
       <div className="mb-6">
         <div className="flex justify-between text-sm text-gray-500 mb-2">
             <span>今日待复习</span>
@@ -130,17 +145,22 @@ export default function ReviewPage() {
         </div>
       </div>
 
+      {/* 卡片主体 */}
       <div className="flex-1 bg-white rounded-3xl shadow-lg border border-gray-100 overflow-hidden flex flex-col relative">
+         {/* 题目区 */}
          <div className="p-8 border-b bg-gradient-to-b from-white to-gray-50/50 flex-1 overflow-y-auto">
             <div className="flex items-center gap-2 mb-4">
                 <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-md font-bold">阶段 {currentNote.review_stage}</span>
             </div>
             {currentNote.image_url && (
-                <div className="mb-6 flex justify-center"><img src={currentNote.image_url} className="max-h-48 rounded-lg shadow-sm object-contain bg-white border" alt="题目图片"/></div>
+                <div className="mb-6 flex justify-center">
+                    <img src={currentNote.image_url} className="max-h-48 rounded-lg shadow-sm object-contain bg-white border" alt="题目图片"/>
+                </div>
             )}
             <h2 className="text-xl md:text-2xl font-bold text-gray-800 leading-relaxed whitespace-pre-wrap">{currentNote.question}</h2>
          </div>
 
+         {/* 答案区 */}
          {isFlipped ? (
              <div className="flex-1 bg-blue-50/30 p-8 overflow-y-auto animate-in slide-in-from-bottom-10 fade-in duration-300">
                  <div className="flex items-center gap-2 mb-4 text-green-600 font-bold"><CheckCircle size={20} /> 解析 / Answer</div>
@@ -155,8 +175,8 @@ export default function ReviewPage() {
          )}
       </div>
 
+      {/* 底部按钮组 */}
       {isFlipped && (
-          // ✨✨✨ 这里变成了 3 个按钮 ✨✨✨
           <div className="mt-6 grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-4">
             <button onClick={() => handleReview("forgot")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 active:scale-95 transition-all">
                 <XCircle size={24} className="mb-1" />
@@ -168,7 +188,6 @@ export default function ReviewPage() {
                 <span className="font-bold text-sm">记得</span>
             </button>
 
-            {/* 😎 新增：熟悉按钮 */}
             <button onClick={() => handleReview("mastered")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-100 active:scale-95 transition-all">
                 <Award size={24} className="mb-1" />
                 <span className="font-bold text-sm">已掌握</span>
