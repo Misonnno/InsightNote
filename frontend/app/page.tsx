@@ -2,73 +2,42 @@
 import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "../supabase";
-import { Trash2, X, MessageSquare, Calendar, LogOut, User, Image as ImageIcon, Loader2 } from "lucide-react";
+import { Loader2, Image as ImageIcon, Send, X, CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-
-// 定义错题的数据结构
-type Note = {
-  id: number;
-  question: string;
-  answer: string;
-  created_at: string;
-  user_id: string;
-  image_url?: string;
-};
 
 export default function Home() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [selectedNote, setSelectedNote] = useState<Note | null>(null);
   
+  // 输入状态
+  const [question, setQuestion] = useState("");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 输出状态
+  const [loading, setLoading] = useState(false);
+  const [currentAnswer, setCurrentAnswer] = useState(""); // 只存当前这道题的解析
+  const [saveStatus, setSaveStatus] = useState(""); // 保存成功提示
 
   // 1. 检查登录
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) router.push("/login");
-      else {
-        setUser(session.user);
-        fetchNotes();
-      }
+      else setUser(session.user);
     };
     checkUser();
   }, [router]);
 
-  // 2. 退出
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
-
-  // 3. 拉取列表
-  const fetchNotes = async () => {
-    const { data, error } = await supabase.from("notes").select("*").order("created_at", { ascending: false });
-    if (!error) setNotes(data || []);
-  };
-
-  // 4. 删除
-  const deleteNote = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm("确定要删除吗？")) return;
-    const { error } = await supabase.from("notes").delete().eq("id", id);
-    if (!error) { fetchNotes(); if (selectedNote?.id === id) setSelectedNote(null); }
-  };
-
-  // 5. 图片选择
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
+  // 2. 图片处理
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
       setSelectedImage(file);
-      const reader = new FileReader();
-      reader.onloadend = () => setImagePreview(reader.result as string);
-      reader.readAsDataURL(file);
+      setImagePreview(URL.createObjectURL(file));
+      setSaveStatus(""); // 重置状态
+      setCurrentAnswer(""); // 重置答案
     }
   };
 
@@ -78,17 +47,20 @@ export default function Home() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // 🧠 核心：解析 + 智能提取标题 + 保存
+  // 3. 核心逻辑：AI 分析 + 自动保存
   const askAI = async () => {
     if (!question && !selectedImage) return;
     setLoading(true);
-    setAnswer("");
+    setCurrentAnswer("");
+    setSaveStatus("");
 
     try {
       let aiAnswer = "";
+      let aiTitle = "";
+      let aiTags: string[] = [];
       let uploadedImageUrl = "";
 
-      // 👉 A. 上传图片
+      // A. 上传图片到 Supabase Storage
       if (selectedImage && user) {
         const fileName = `${user.id}/${Date.now()}_${selectedImage.name}`;
         const { error: uploadError } = await supabase.storage.from('mistakes').upload(fileName, selectedImage);
@@ -98,19 +70,34 @@ export default function Home() {
         }
       }
 
-      // 👉 B. AI 分析
+      // B. 调用后端 AI
       if (selectedImage) {
         const formData = new FormData();
-        // 提示词保持不变，让 AI 输出【题目】和【解析】
-        const prompt = question || "请做两件事：1. 把图片里的题目文字提取出来（标为【题目】）。2. 给出详细的解析和答案（标为【解析】）。";
-        formData.append("text", prompt);
+        const systemPrompt = `
+你是一个智能助教。请分析图片并输出纯净的 JSON 字符串。
+格式要求：
+{
+  "title": "简短的语义标题，如'【数学】导数单调性'",
+  "analysis": "详细解析，支持 Markdown",
+  "tags": ["知识点1", "知识点2"]
+}
+`;
+        formData.append("text", `${systemPrompt}\n\n用户的补充问题：${question || ""}`);
         formData.append("image", selectedImage);
 
         const res = await fetch("http://127.0.0.1:8000/analyze_image", { method: "POST", body: formData });
         const data = await res.json();
-        aiAnswer = data.answer || data.error;
-
+        
+        if (data.analysis) {
+            aiAnswer = data.analysis;
+            aiTitle = data.title;
+            aiTags = data.tags || [];
+        } else {
+            aiAnswer = data.error || "AI 解析格式异常";
+            aiTitle = "解析失败";
+        }
       } else {
+        // 纯文字模式
         const res = await fetch("http://127.0.0.1:8000/ask_ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -118,158 +105,140 @@ export default function Home() {
         });
         const data = await res.json();
         aiAnswer = data.answer || data.error;
+        aiTitle = question;
       }
 
-      setAnswer(aiAnswer);
+      setCurrentAnswer(aiAnswer);
 
-      // 👉 C. 🌟 智能提取标题逻辑 (这里是新加的！)
+      // C. 自动保存到数据库
       if (aiAnswer && user) {
-        let finalQuestion = question; // 默认使用用户手写的
+        const finalTitle = aiTitle || question || "无标题错题";
 
-        // 如果用户没手写问题，而且是图片模式，我们尝试从 AI 回答里抠出题目
-        if (!finalQuestion && selectedImage) {
-          // 正则表达式：寻找 "【题目】" 后面的文字，直到换行符
-          const match = aiAnswer.match(/【题目】\s*(.+)/);
-          if (match && match[1]) {
-            finalQuestion = match[1].trim(); // 成功提取！
-          } else {
-            finalQuestion = "📸 [图片错题] (自动提取失败)"; // 兜底
-          }
-        }
-        
-        // 最后兜底
-        if (!finalQuestion) finalQuestion = "无标题问题";
-
-        // 存入数据库
-        await supabase.from("notes").insert([{ 
-          question: finalQuestion, // 👈 这里现在是 AI 提取出来的真题目了！
+        const { error } = await supabase.from("notes").insert([{ 
+          question: finalTitle,
           answer: aiAnswer, 
           user_id: user.id,
-          image_url: uploadedImageUrl 
+          image_url: uploadedImageUrl,
+          tags: aiTags
         }]);
-        
-        fetchNotes();
-        clearImage();
-        setQuestion("");
+
+        if (!error) {
+            setSaveStatus("✅ 已自动存入错题库！");
+            // 可以在这里选择清空输入，或者保留给用户看
+            // clearImage(); 
+            // setQuestion("");
+        }
       }
 
     } catch (err) {
       console.error(err);
-      setAnswer("发生错误，请检查网络或后端。");
+      setCurrentAnswer("❌ 发生网络错误，请检查后端服务。");
     }
     setLoading(false);
   };
 
-  if (!user) return <div className="flex h-screen items-center justify-center text-blue-600"><Loader2 className="animate-spin mr-2"/> 加载中...</div>;
-
   return (
-    <main className="flex min-h-screen flex-col items-center p-4 md:p-8 bg-gray-50 text-gray-800 font-sans">
-      <div className="z-10 max-w-5xl w-full flex items-center justify-between mb-8">
-        <h1 className="text-3xl font-bold text-blue-600 flex items-center gap-2">InsightNote 🧠</h1>
-        <div className="flex items-center gap-4">
-           <div className="hidden md:flex items-center gap-2 text-sm text-gray-500 bg-white px-3 py-1.5 rounded-full shadow-sm">
-            <User size={14} /> {user.email}
-          </div>
-          <button onClick={handleLogout} className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-red-50 hover:text-red-500 transition-all"><LogOut size={16} /> 退出</button>
-        </div>
+    <div className="max-w-3xl mx-auto p-4 md:p-8">
+      
+      {/* 标题区 */}
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">上传新错题 📝</h1>
+        <p className="text-gray-500">拍照上传，AI 自动分析并归档到你的知识库</p>
       </div>
 
-      <div className="w-full max-w-3xl bg-white p-6 rounded-2xl shadow-xl mb-8 border border-gray-100 transition-all">
+      {/* 输入卡片 */}
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-gray-100 transition-all">
+        
+        {/* 图片预览区 */}
         {imagePreview && (
-          <div className="mb-4 relative inline-block">
-            <img src={imagePreview} alt="Preview" className="h-32 rounded-lg border border-gray-200 object-cover" />
-            <button onClick={clearImage} className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full shadow-md hover:bg-red-600"><X size={12} /></button>
+          <div className="mb-4 relative inline-block group">
+            <img src={imagePreview} alt="Preview" className="h-48 rounded-lg border border-gray-200 object-cover shadow-sm" />
+            <button 
+                onClick={clearImage} 
+                className="absolute -top-2 -right-2 bg-red-500 text-white p-1.5 rounded-full shadow-md hover:bg-red-600 transition-transform hover:scale-110"
+            >
+                <X size={14} />
+            </button>
           </div>
         )}
 
+        {/* 文本输入区 */}
         <textarea
-          className="w-full p-4 border-2 border-gray-100 rounded-xl focus:outline-none focus:border-blue-500 text-black placeholder-gray-400 bg-gray-50 transition-all resize-none"
-          rows={3}
-          placeholder={selectedImage ? "AI 将自动提取题目并解析..." : "输入错题、代码或概念..."}
+          className="w-full p-4 border-2 border-gray-100 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50/50 transition-all resize-none text-gray-700 placeholder-gray-400 bg-gray-50/50"
+          rows={4}
+          placeholder="在此输入问题，或者直接上传图片..."
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
         />
-        
-        <div className="mt-4 flex justify-between items-center">
-          <div className="relative">
-            <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageSelect} className="hidden" id="img-upload"/>
-            <label htmlFor="img-upload" className="cursor-pointer flex items-center gap-2 text-gray-500 hover:text-blue-600 transition-colors px-2 py-1 rounded-md hover:bg-blue-50">
-              <ImageIcon size={20} /> <span className="text-sm font-medium">上传错题</span>
-            </label>
+
+        {/* 底部工具栏 */}
+        <div className="flex justify-between items-center mt-4">
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              ref={fileInputRef}
+              onChange={handleImageUpload}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors font-medium text-sm"
+            >
+              <ImageIcon size={18} />
+              {imagePreview ? "更换图片" : "上传图片"}
+            </button>
+            <span className="text-xs text-gray-400 hidden md:inline">支持 JPG, PNG</span>
           </div>
-          <button onClick={askAI} disabled={loading || (!question && !selectedImage)} className={`px-6 py-2.5 rounded-xl text-white font-bold transition-all flex items-center gap-2 shadow-md ${loading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 hover:-translate-y-0.5"}`}>
-            {loading ? <><Loader2 size={18} className="animate-spin"/> 处理中...</> : <>✨ 解析并保存</>}
+
+          <button
+            onClick={askAI}
+            disabled={loading || (!question && !selectedImage)}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-white shadow-lg shadow-blue-500/30 transition-all transform active:scale-95 ${
+              loading || (!question && !selectedImage)
+                ? "bg-gray-300 cursor-not-allowed shadow-none"
+                : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 hover:-translate-y-0.5"
+            }`}
+          >
+            {loading ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
+            {loading ? "AI 思考中..." : "开始分析"}
           </button>
         </div>
+      </div>
 
-        {answer && (
-          <div className="mt-6 p-6 bg-blue-50 rounded-xl border border-blue-100 animate-in fade-in slide-in-from-bottom-2">
-             <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2 text-lg"><MessageSquare size={20}/> 解析结果：</h3>
-             <div className="markdown-body text-gray-800 leading-relaxed">
-                <ReactMarkdown>{answer}</ReactMarkdown>
+      {/* 结果反馈区 */}
+      {(currentAnswer || saveStatus) && (
+        <div className="mt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+           
+           {/* 保存成功提示 */}
+           {saveStatus && (
+             <div className="mb-4 flex items-center gap-2 text-green-700 bg-green-50 px-4 py-3 rounded-xl border border-green-100 font-medium">
+                <CheckCircle2 size={20} />
+                {saveStatus}
+                <button 
+                  onClick={() => router.push('/library')} 
+                  className="ml-auto text-sm underline hover:text-green-800"
+                >
+                  去错题库查看 &rarr;
+                </button>
              </div>
-          </div>
-        )}
-      </div>
+           )}
 
-      <div className="w-full max-w-3xl">
-        <h2 className="text-xl font-bold text-gray-700 mb-4 flex items-center gap-2">📚 我的错题库</h2>
-        <div className="grid gap-3">
-          {notes.map((note) => (
-            <div key={note.id} onClick={() => setSelectedNote(note)} className="bg-white p-4 rounded-xl border border-gray-100 hover:shadow-md hover:border-blue-200 transition-all cursor-pointer flex gap-4 group">
-              {note.image_url && (
-                <div className="w-16 h-16 flex-shrink-0 bg-gray-100 rounded-lg overflow-hidden border border-gray-200">
-                  <img src={note.image_url} alt="缩略图" className="w-full h-full object-cover" />
-                </div>
-              )}
-              
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-start">
-                   {/* 列表这里也会显示提取出来的真题目 */}
-                   <h3 className="font-bold text-gray-800 line-clamp-1">{note.question}</h3>
-                   <button onClick={(e) => deleteNote(note.id, e)} className="text-gray-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16} /></button>
-                </div>
-                <p className="text-gray-500 text-xs mt-1 flex items-center gap-1"><Calendar size={10} /> {new Date(note.created_at).toLocaleString()}</p>
-                <div className="text-gray-400 text-sm mt-1 line-clamp-1">{note.answer.slice(0, 50).replace(/[#*`]/g, '')}...</div>
-              </div>
-            </div>
-          ))}
-          {notes.length === 0 && <p className="text-center text-gray-400 py-8">暂无记录</p>}
-        </div>
-      </div>
-
-      {selectedNote && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedNote(null)}>
-          <div className="bg-white w-full max-w-3xl max-h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b flex justify-between bg-gray-50">
-              <h2 className="font-bold text-lg">📝 错题详情</h2>
-              <button onClick={() => setSelectedNote(null)}><X className="text-gray-500 hover:text-black"/></button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto">
-              {selectedNote.image_url && (
-                <div className="mb-6 bg-gray-50 p-2 rounded-xl border border-gray-200 text-center">
-                  <img src={selectedNote.image_url} alt="错题原图" className="max-h-64 mx-auto rounded-lg shadow-sm" />
-                  <p className="text-xs text-gray-400 mt-2">原题快照</p>
-                </div>
-              )}
-
-              <h3 className="font-bold text-lg mb-3 text-blue-700">问题/题目：</h3>
-              {/* 这里就是你想要的！显示提取出来的题目 */}
-              <p className="text-gray-800 mb-6 bg-blue-50 p-3 rounded-lg font-medium">{selectedNote.question}</p>
-
-              <h3 className="font-bold text-lg mb-3 text-green-700">AI 解析：</h3>
-              <div className="markdown-body text-gray-700 leading-relaxed">
-                <ReactMarkdown components={{
-                    strong: ({node, ...props}) => <span className="font-bold text-blue-900" {...props} />,
-                    ul: ({node, ...props}) => <ul className="list-disc pl-6 space-y-2" {...props} />,
-                    code: ({node, ...props}) => (<code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-sm font-mono" {...props} />),
-                }}>{selectedNote.answer}</ReactMarkdown>
-              </div>
-            </div>
-          </div>
+           {/* AI 解析展示 */}
+           {currentAnswer && (
+             <div className="bg-white p-8 rounded-2xl shadow-lg border border-gray-100">
+               <h3 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2">
+                 🤖 AI 解析结果
+               </h3>
+               {/* 👇 修复了 className 报错：把样式放在外层 div */}
+               <div className="markdown-body text-gray-700 leading-relaxed">
+                  <ReactMarkdown>{currentAnswer}</ReactMarkdown>
+               </div>
+             </div>
+           )}
         </div>
       )}
-    </main>
+
+    </div>
   );
 }

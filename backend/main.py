@@ -1,12 +1,19 @@
+import os
+import json
+import re
+import base64
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
-import base64
+
+# 1. 加载环境变量 (读取 .env 文件)
+load_dotenv()
 
 app = FastAPI()
 
-# 允许跨域 (让前端能连上)
+# 2. 允许跨域
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,73 +25,82 @@ app.add_middleware(
 class Question(BaseModel):
     text: str
 
-# ================= 🔑 密钥配置区 (填这里！) =================
+# 3. 读取密钥 (安全版)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL")
+SILICON_API_KEY = os.getenv("SILICON_API_KEY")
+SILICON_BASE_URL = os.getenv("SILICON_BASE_URL")
+SILICON_VISION_MODEL = os.getenv("SILICON_VISION_MODEL")
 
-# 1. DeepSeek 官方配置 (你花了10块钱那个)
-# 用来处理纯文字对话
-DEEPSEEK_API_KEY = "sk-f3d7c2773ef345b0a59694320058542c" 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-# 2. 硅基流动配置 (用来调用 Qwen 看图)
-# 去 https://cloud.siliconflow.cn/account/ak 获取
-SILICON_API_KEY = "sk-vxxgqmofwqfrpgbqccuapwxbbqxhtldsgjrrbuotaozsndjj" 
-SILICON_BASE_URL = "https://api.siliconflow.cn/v1"
-
-# 这里的模型名字我是根据你截图里最强的那个写的
-SILICON_VISION_MODEL = "Qwen/Qwen2.5-VL-72B-Instruct"
-
-# ==========================================================
+# --- 新增工具函数：清洗 AI 返回的 JSON ---
+def clean_json_response(content: str):
+    """
+    不管 AI 返回什么，都尽力提取出 JSON 对象
+    """
+    try:
+        # 情况A：AI 很听话，直接给了 JSON
+        return json.loads(content)
+    except json.JSONDecodeError:
+        # 情况B：AI 加了 Markdown 标记 (```json ... ```)
+        match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except:
+                pass
+        # 情况C：彻底失败，做个兜底
+        return {
+            "title": "AI解析结果 (非标准格式)",
+            "analysis": content,
+            "tags": []
+        }
 
 @app.post("/ask_ai")
 def ask_ai(question: Question):
-    """纯文字模式：调用 DeepSeek V3"""
+    """纯文字模式 (DeepSeek)"""
     try:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "你是一个专业的软件工程导师，善于分析错题和代码。"},
+                {"role": "system", "content": "你是一个专业的软件工程导师。"},
                 {"role": "user", "content": question.text}
             ],
             stream=False
         )
         return {"answer": response.choices[0].message.content}
     except Exception as e:
-        print(f"DeepSeek 报错: {e}")
-        return {"error": f"文字分析失败: {str(e)}"}
+        print(f"DeepSeek Error: {e}")
+        return {"error": str(e)}
 
 @app.post("/analyze_image")
 async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
-    """图片模式：调用 Qwen 2.5-VL (通过硅基流动)"""
+    """图片模式 (Qwen-VL) - 返回结构化 JSON"""
     try:
-        # 1. 把上传的图片转成 Base64 格式
         image_content = await image.read()
         base64_image = base64.b64encode(image_content).decode('utf-8')
         
-        # 2. 连接硅基流动
         client = OpenAI(api_key=SILICON_API_KEY, base_url=SILICON_BASE_URL)
 
-        # 3. 发送请求 (Qwen 2.5 VL)
         response = client.chat.completions.create(
             model=SILICON_VISION_MODEL, 
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": text}, # 用户的问题
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}" # 图片数据
-                            },
-                        },
+                        {"type": "text", "text": text},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
                     ],
                 }
             ],
             stream=False
         )
-        return {"answer": response.choices[0].message.content}
+        
+        # 关键修改：清洗数据，返回 JSON 对象
+        raw_content = response.choices[0].message.content
+        cleaned_data = clean_json_response(raw_content)
+        return cleaned_data 
 
     except Exception as e:
-        print(f"Qwen 报错: {e}")
-        return {"error": f"图片识别失败: {str(e)}"}
+        print(f"Qwen Error: {e}")
+        return {"error": str(e), "analysis": "识别服务出错", "title": "错误"}
