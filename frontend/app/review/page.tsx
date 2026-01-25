@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../../supabase";
 import ReactMarkdown from "react-markdown";
-import { CheckCircle, XCircle, Calendar, Loader2, Trophy, Eye, Award } from "lucide-react";
+import { CheckCircle, XCircle, Calendar, Loader2, Trophy, Eye, EyeOff, Award } from "lucide-react";
 
 // 复习间隔 (天数)
 const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
@@ -19,8 +19,8 @@ type Note = {
 export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0); // 当前第几题
-  const [isFlipped, setIsFlipped] = useState(false); // 是否翻牌
+  const [currentIndex, setCurrentIndex] = useState(0); 
+  const [isFlipped, setIsFlipped] = useState(false); 
 
   useEffect(() => {
     const fetchDueNotes = async () => {
@@ -33,8 +33,8 @@ export default function ReviewPage() {
         .from("notes")
         .select("*")
         .eq("user_id", session.user.id)
-        .eq("is_mastered", false) // 只查未掌握的
-        .lte("next_review_at", now) // 查“到期”的
+        .eq("is_mastered", false)
+        .lte("next_review_at", now)
         .order("next_review_at", { ascending: true })
         .limit(50);
 
@@ -49,39 +49,27 @@ export default function ReviewPage() {
     if (!currentNote) return;
 
     let newStage = currentNote.review_stage;
-    let nextDate = new Date(); // 获取当前时间
+    let nextDate = new Date();
     let isMastered = false;
 
     if (result === "mastered") {
-      // 😎 已掌握：踢出复习队列
       isMastered = true;
       nextDate.setFullYear(nextDate.getFullYear() + 100); 
     } else if (result === "remembered") {
-      // ✅ 记得：计算间隔天数
       const intervalDays = REVIEW_INTERVALS[newStage] || 60;
       nextDate.setDate(nextDate.getDate() + intervalDays);
-      
-      // ✨✨✨ 核心修改：将时间强制设为当天的凌晨 04:00:00 ✨✨✨
-      // 这样就实现了“按天刷新”，而不是“按24小时滚动刷新”
       nextDate.setHours(4, 0, 0, 0); 
-      
       newStage += 1;
     } else {
-      // ❌ 忘了：明天复习
       nextDate.setDate(nextDate.getDate() + 1);
-      
-      // ✨✨✨ 核心修改：同样设为明天凌晨 04:00:00 ✨✨✨
       nextDate.setHours(4, 0, 0, 0);
-      
       newStage = 0;
     }
 
-    // 1. 乐观更新 UI (立即切下一题)
     const nextIndex = currentIndex + 1;
     setCurrentIndex(nextIndex);
     setIsFlipped(false);
 
-    // 2. 异步更新数据库
     await supabase
       .from("notes")
       .update({
@@ -91,17 +79,13 @@ export default function ReviewPage() {
       })
       .eq("id", currentNote.id);
 
-    // 撒花特效
     if (nextIndex >= notes.length && typeof window !== "undefined" && (window as any).confetti) {
       (window as any).confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
     }
   };
 
-  // --- 渲染部分 ---
-
   if (loading) return <div className="flex h-[80vh] items-center justify-center text-blue-600"><Loader2 size={40} className="animate-spin" /></div>;
 
-  // 场景：没有待复习的题
   if (notes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
@@ -115,7 +99,6 @@ export default function ReviewPage() {
     );
   }
 
-  // 场景：复习完成
   if (currentIndex >= notes.length) {
     return (
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
@@ -134,7 +117,6 @@ export default function ReviewPage() {
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 h-[calc(100vh-80px)] flex flex-col">
       
-      {/* 进度条 */}
       <div className="mb-6">
         <div className="flex justify-between text-sm text-gray-500 mb-2">
             <span>今日待复习</span>
@@ -145,9 +127,7 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {/* 卡片主体 */}
       <div className="flex-1 bg-white rounded-3xl shadow-lg border border-gray-100 overflow-hidden flex flex-col relative">
-         {/* 题目区 */}
          <div className="p-8 border-b bg-gradient-to-b from-white to-gray-50/50 flex-1 overflow-y-auto">
             <div className="flex items-center gap-2 mb-4">
                 <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-md font-bold">阶段 {currentNote.review_stage}</span>
@@ -160,10 +140,22 @@ export default function ReviewPage() {
             <h2 className="text-xl md:text-2xl font-bold text-gray-800 leading-relaxed whitespace-pre-wrap">{currentNote.question}</h2>
          </div>
 
-         {/* 答案区 */}
          {isFlipped ? (
              <div className="flex-1 bg-blue-50/30 p-8 overflow-y-auto animate-in slide-in-from-bottom-10 fade-in duration-300">
-                 <div className="flex items-center gap-2 mb-4 text-green-600 font-bold"><CheckCircle size={20} /> 解析 / Answer</div>
+                 {/* ✨✨✨ 修改部分：标题栏增加了收起按钮 ✨✨✨ */}
+                 <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2 text-green-600 font-bold">
+                        <CheckCircle size={20} /> 解析 / Answer
+                    </div>
+                    {/* 点击这个按钮，把 isFlipped 设回 false */}
+                    <button 
+                        onClick={() => setIsFlipped(false)}
+                        className="flex items-center gap-1 text-xs font-bold text-gray-500 bg-white/50 px-3 py-1.5 rounded-full hover:bg-white hover:text-blue-600 transition-colors shadow-sm"
+                    >
+                        <EyeOff size={14}/> 收起
+                    </button>
+                 </div>
+                 
                  <div className="markdown-body text-gray-700"><ReactMarkdown>{currentNote.answer}</ReactMarkdown></div>
              </div>
          ) : (
@@ -175,7 +167,6 @@ export default function ReviewPage() {
          )}
       </div>
 
-      {/* 底部按钮组 */}
       {isFlipped && (
           <div className="mt-6 grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-4">
             <button onClick={() => handleReview("forgot")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 active:scale-95 transition-all">
