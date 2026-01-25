@@ -70,7 +70,8 @@ export default function ReviewPage() {
     setCurrentIndex(nextIndex);
     setIsFlipped(false);
 
-    await supabase
+    // 2. 异步更新数据库
+    const { error } = await supabase // 👈 记得加上 const { error } = 
       .from("notes")
       .update({
         review_stage: newStage,
@@ -78,6 +79,14 @@ export default function ReviewPage() {
         is_mastered: isMastered
       })
       .eq("id", currentNote.id);
+
+    // 加入调试代码
+    if (error) {
+        console.error("❌ 数据库保存失败！", error.message);
+        alert("保存失败，请检查控制台：" + error.message);
+    } else {
+        console.log("✅ 保存成功！下次复习时间:", nextDate.toLocaleString());
+    }
 
     if (nextIndex >= notes.length && typeof window !== "undefined" && (window as any).confetti) {
       (window as any).confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
