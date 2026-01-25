@@ -2,14 +2,11 @@ import os
 import json
 import re
 import base64
-import sqlite3
-from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
-from typing import List, Optional
 
 # 1. 加载环境变量
 load_dotenv()
@@ -25,35 +22,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3. 数据库初始化 (自动创建一个 mistakes.db 文件)
-DB_NAME = "mistakes.db"
-
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    # 创建错题表
-    c.execute('''CREATE TABLE IF NOT EXISTS mistakes
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  title TEXT,
-                  answer TEXT,
-                  analysis TEXT,
-                  tags TEXT,
-                  created_at TEXT)''')
-    conn.commit()
-    conn.close()
-
-# 启动时初始化数据库
-init_db()
-
 # --- 模型定义 ---
 class Question(BaseModel):
     text: str
-
-class ReviewItem(BaseModel):
-    title: str
-    answer: str
-    analysis: str
-    tags: List[str] = []
 
 # --- 配置密钥 ---
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
@@ -89,7 +60,7 @@ def clean_json_response(content: str):
     }
 
 # ===========================
-# 🚀 模块 A：AI 智能解析接口
+# 🚀 AI 智能解析接口
 # ===========================
 
 @app.post("/ask_ai")
@@ -175,65 +146,6 @@ async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
     except Exception as e:
         print(f"Error: {e}")
         return {"title": "Error", "conclusion": "系统异常", "analysis": str(e), "tags": ["Error"]}
-
-# ===========================
-# 📚 模块 B：错题本数据库接口 (修复了这里！)
-# ===========================
-
-# 1. 添加错题
-@app.post("/review/add")
-def add_review(item: ReviewItem):
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        # 将 tags 列表转为字符串存储
-        tags_str = json.dumps(item.tags, ensure_ascii=False)
-        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        c.execute("INSERT INTO mistakes (title, answer, analysis, tags, created_at) VALUES (?, ?, ?, ?, ?)",
-                  (item.title, item.answer, item.analysis, tags_str, created_at))
-        conn.commit()
-        conn.close()
-        print(f"✅ 成功保存错题: {item.title[:10]}...")
-        return {"status": "success", "message": "Saved successfully"}
-    except Exception as e:
-        print(f"❌ 保存失败: {e}")
-        return {"status": "error", "message": str(e)}
-
-# 2. 获取错题列表 (前端 Review 页面会用到)
-@app.get("/review/list")
-def get_reviews():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row # 让结果可以通过列名访问
-    c = conn.cursor()
-    c.execute("SELECT * FROM mistakes ORDER BY id DESC")
-    rows = c.fetchall()
-    conn.close()
-    
-    results = []
-    for row in rows:
-        results.append({
-            "id": row["id"],
-            "title": row["title"],
-            "answer": row["answer"],
-            "analysis": row["analysis"],
-            "tags": json.loads(row["tags"]) if row["tags"] else [],
-            "created_at": row["created_at"]
-        })
-    return results
-
-# 3. 删除错题
-@app.delete("/review/delete/{item_id}")
-def delete_review(item_id: int):
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("DELETE FROM mistakes WHERE id = ?", (item_id,))
-        conn.commit()
-        conn.close()
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

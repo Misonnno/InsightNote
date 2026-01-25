@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import Image from "next/image";
 import { Upload, X, Send, Loader2, FileText, CheckCircle2, BrainCircuit, Database } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { supabase } from "../supabase"; // 引入 Supabase
 
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -21,6 +22,7 @@ export default function Home() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saveLoading, setSaveLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AIResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -92,28 +94,71 @@ export default function Home() {
     }
   };
 
-  // 👇 新增：添加到错题本功能
+  // 👇👇👇 核心修改：上传到 'mistakes' 桶 👇👇👇
   const addToLibrary = async () => {
     if (!aiResult) return;
+    setSaveLoading(true);
+
     try {
-      const res = await fetch("http://127.0.0.1:8000/review/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: aiResult.title,
-          answer: aiResult.conclusion,
-          analysis: aiResult.analysis,
-          tags: aiResult.tags || [],
-        }),
-      });
-      if (res.ok) {
-        alert("✅ 已成功加入错题本！");
-      } else {
-        alert("❌ 添加失败，请检查后端 /review/add 接口");
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        alert("请先登录后再保存错题！");
+        setSaveLoading(false);
+        return;
       }
+
+      let uploadedImageUrl = null;
+
+      // 如果有图片，先上传
+      if (selectedImage) {
+        const fileExt = selectedImage.name.split('.').pop();
+        const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+        const filePath = `${session.user.id}/${fileName}`; 
+
+        // 🔥 这里改成了你的 bucket 名字: 'mistakes'
+        const { error: uploadError } = await supabase.storage
+          .from('mistakes') 
+          .upload(filePath, selectedImage);
+
+        if (uploadError) {
+          console.error("图片上传失败:", uploadError);
+          alert(`图片上传失败: ${uploadError.message} (请检查 Supabase Storage 权限)`);
+          setSaveLoading(false);
+          return;
+        }
+
+        // 获取公开链接
+        const { data } = supabase.storage
+          .from('mistakes')
+          .getPublicUrl(filePath);
+          
+        uploadedImageUrl = data.publicUrl;
+      }
+
+      const fullAnswer = `**最终结论：**\n${aiResult.conclusion}\n\n---\n\n**深度解析：**\n${aiResult.analysis}`;
+
+      // 存入数据库 (带上 image_url)
+      const { error } = await supabase.from('notes').insert({
+        user_id: session.user.id,
+        question: aiResult.title || "未命名题目",
+        answer: fullAnswer,
+        tags: aiResult.tags || [],
+        image_url: uploadedImageUrl, // ✅ 保存图片链接
+      });
+
+      if (error) {
+        console.error("Supabase Error:", error);
+        alert(`保存失败: ${error.message}`);
+      } else {
+        alert("✅ 已成功保存到云端错题库！");
+      }
+
     } catch (e) {
       console.error(e);
-      alert("无法连接到后端");
+      alert("保存过程出错");
+    } finally {
+      setSaveLoading(false);
     }
   };
 
@@ -128,7 +173,6 @@ export default function Home() {
       </div>
 
       <div className="w-full max-w-3xl space-y-6">
-        {/* 输入区 */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <div className="space-y-4">
             <textarea
@@ -191,11 +235,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* 结果展示区 */}
         {aiResult && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             
-            {/* 1. 题目 */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="flex items-center gap-2 mb-4">
                 <span className="bg-blue-50 text-blue-600 p-2 rounded-lg">
@@ -210,7 +252,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* 2. 结论 */}
             <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 rounded-2xl border border-green-100 shadow-sm">
               <div className="flex items-center gap-2 mb-4">
                 <span className="bg-green-100 text-green-700 p-2 rounded-lg">
@@ -225,7 +266,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* 3. 深度解析 (含错题本按钮) */}
             <div className="bg-white p-8 rounded-2xl shadow-lg border border-gray-100">
               <div className="flex items-center justify-between mb-6 pb-4 border-b border-gray-100">
                 <div className="flex items-center gap-2">
@@ -235,13 +275,17 @@ export default function Home() {
                   <h3 className="font-bold text-lg text-gray-800">AI 深度解析</h3>
                 </div>
                 
-                {/* 👇 按钮在这里 👇 */}
                 <button
                   onClick={addToLibrary}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
+                  disabled={saveLoading}
+                  className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                    saveLoading 
+                      ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
+                      : "text-purple-600 bg-purple-50 hover:bg-purple-100"
+                  }`}
                 >
-                  <Database size={16} />
-                  存入错题库
+                  {saveLoading ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
+                  {saveLoading ? "保存中..." : "存入错题库"}
                 </button>
               </div>
               

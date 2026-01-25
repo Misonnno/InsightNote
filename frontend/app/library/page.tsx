@@ -1,10 +1,13 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "../../supabase";
+import { supabase } from "../../supabase"; // 确保这里路径对得上
 import ReactMarkdown from "react-markdown";
 import { Trash2, X, Calendar, Search, Image as ImageIcon, Tag, Star, Eye, EyeOff, Lightbulb, CheckCircle2, CircleDashed } from "lucide-react";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 
-// ... (Type Note 保持不变，可以加上 is_mastered 可选)
+// 定义错题结构
 type Note = {
   id: number;
   question: string;
@@ -13,7 +16,7 @@ type Note = {
   user_id: string;
   image_url?: string;
   tags: string[] | null;
-  is_mastered?: boolean; // 新增字段
+  is_mastered?: boolean;
 };
 
 export default function LibraryPage() {
@@ -27,7 +30,6 @@ export default function LibraryPage() {
   const [collectedIds, setCollectedIds] = useState<Set<number>>(new Set());
   const [showAnalysis, setShowAnalysis] = useState(false);
 
-  // ✨ 新增：Tab 状态 (active | mastered)
   const [activeTab, setActiveTab] = useState<"reviewing" | "mastered">("reviewing");
 
   useEffect(() => {
@@ -37,6 +39,7 @@ export default function LibraryPage() {
   const fetchData = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
+      // 获取错题
       const { data: notesData } = await supabase
         .from("notes")
         .select("*")
@@ -44,6 +47,7 @@ export default function LibraryPage() {
         .order("created_at", { ascending: false });
       if (notesData) setNotes(notesData);
 
+      // 获取收藏夹数据
       const { data: collectionData } = await supabase.from("collections").select("*").eq("user_id", session.user.id);
       if (collectionData) setCollections(collectionData);
 
@@ -66,7 +70,7 @@ export default function LibraryPage() {
         alert("收藏成功！");
         setCollectedIds(prev => new Set(prev).add(showAddToCollectionModal));
         setShowAddToCollectionModal(null);
-    } else if (error.code === '23505') {
+    } else if (error && error.code === '23505') {
         alert("已在收藏夹中");
     }
   };
@@ -76,22 +80,15 @@ export default function LibraryPage() {
     setShowAnalysis(false); 
   };
 
-  // ✨✨✨ 核心过滤逻辑 ✨✨✨
   const filteredNotes = notes.filter(note => {
-    // 1. 先按搜索词过滤
     const lowerTerm = searchTerm.toLowerCase();
     const matchSearch = note.question?.toLowerCase().includes(lowerTerm) || note.tags?.some(tag => tag.toLowerCase().includes(lowerTerm));
-    
-    // 2. 再按 Tab 过滤 (复习中 vs 已掌握)
     const matchTab = activeTab === "mastered" ? note.is_mastered === true : note.is_mastered !== true;
-
     return matchSearch && matchTab;
   });
 
   return (
     <div className="max-w-5xl mx-auto p-4 md:p-8 min-h-screen">
-      
-      {/* 顶部标题栏 */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">📚 错题宝库</h1>
@@ -102,7 +99,6 @@ export default function LibraryPage() {
         </div>
       </div>
 
-      {/* ✨✨✨ Tab 切换按钮 ✨✨✨ */}
       <div className="flex gap-4 mb-6 border-b border-gray-200">
         <button 
             onClick={() => setActiveTab("reviewing")}
@@ -124,7 +120,6 @@ export default function LibraryPage() {
         </button>
       </div>
       
-      {/* 错题列表 (内容不变，但数据源是 filteredNotes) */}
       <div className="grid gap-4">
         {filteredNotes.map((note) => {
           const isCollected = collectedIds.has(note.id);
@@ -151,12 +146,10 @@ export default function LibraryPage() {
         {filteredNotes.length === 0 && (
           <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-gray-200">
             <p className="text-gray-400 mb-2">🔍 这里空空如也</p>
-            {activeTab === "mastered" ? <p className="text-sm text-gray-400">去复习页把题目标记为“已掌握”吧！</p> : null}
           </div>
         )}
       </div>
 
-      {/* 详情弹窗 (保持不变，省略部分重复代码以节省空间，直接用之前最新的即可) */}
       {selectedNote && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedNote(null)}>
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
@@ -169,16 +162,16 @@ export default function LibraryPage() {
                 <div className="mb-6"><h4 className="text-sm font-bold text-blue-600 mb-2 uppercase tracking-wide">题目 / Question</h4><p className="text-gray-900 font-medium text-lg leading-relaxed bg-blue-50/50 p-4 rounded-xl border border-blue-100 whitespace-pre-wrap">{selectedNote.question}</p></div>
                 <div>
                     <div className="flex items-center justify-between mb-2"><h4 className="text-sm font-bold text-green-600 uppercase tracking-wide">AI 深度解析 / Analysis</h4><button onClick={() => setShowAnalysis(!showAnalysis)} className="flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors">{showAnalysis ? <EyeOff size={14}/> : <Eye size={14}/>}{showAnalysis ? "隐藏解析" : "查看解析"}</button></div>
-                    {showAnalysis ? <div className="markdown-body bg-gray-50 p-4 rounded-xl border border-gray-100 text-gray-700 animate-in fade-in slide-in-from-top-2"><ReactMarkdown>{selectedNote.answer}</ReactMarkdown></div> : <div onClick={() => setShowAnalysis(true)} className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-blue-300 hover:bg-blue-50/30 transition-all group"><Lightbulb className="mx-auto text-gray-300 mb-2 group-hover:text-yellow-500 transition-colors" size={32} /><p className="text-gray-500 font-medium group-hover:text-blue-600">💡 解析已隐藏，点击查看</p></div>}
+                    {showAnalysis ? <div className="markdown-body bg-gray-50 p-4 rounded-xl border border-gray-100 text-gray-700 animate-in fade-in slide-in-from-top-2">
+                        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{selectedNote.answer}</ReactMarkdown>
+                    </div> : <div onClick={() => setShowAnalysis(true)} className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-blue-300 hover:bg-blue-50/30 transition-all group"><Lightbulb className="mx-auto text-gray-300 mb-2 group-hover:text-yellow-500 transition-colors" size={32} /><p className="text-gray-500 font-medium group-hover:text-blue-600">💡 解析已隐藏，点击查看</p></div>}
                 </div>
              </div>
           </div>
         </div>
       )}
 
-      {/* 收藏弹窗 (保持不变，省略) */}
       {showAddToCollectionModal && (
-         /* 请使用之前发给你的收藏夹弹窗代码 */
          <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center" onClick={() => setShowAddToCollectionModal(null)}>
             <div className="bg-white rounded-xl p-6 w-80 shadow-2xl" onClick={e => e.stopPropagation()}>
                <h3 className="font-bold text-lg mb-4 text-center">选择收藏夹</h3>
