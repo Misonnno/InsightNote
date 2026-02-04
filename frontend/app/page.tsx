@@ -229,7 +229,7 @@ export default function Home() {
                 }`}
               >
                 {loading ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
-                {loading ? "深度思考中..." : "开始解析"}
+                {loading ? "深度思考中S..." : "开始解析"}
               </button>
             </div>
           </div>
