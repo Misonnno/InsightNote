@@ -1,14 +1,17 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Home, BookOpen, Network, CalendarCheck, LogOut } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Home, BookOpen, Network, CalendarCheck, LogOut, Star } from "lucide-react";
 import { supabase } from "../../supabase";
-import { useRouter } from "next/navigation";
-import { Star } from "lucide-react";
 
 export default function Navbar() {
-  const pathname = usePathname(); // 获取当前路径，用来高亮当前按钮
+  const pathname = usePathname(); 
   const router = useRouter();
+
+  // 1. 如果在登录页，直接不渲染导航栏
+  if (pathname === "/login") {
+    return null;
+  }
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -19,7 +22,7 @@ export default function Navbar() {
   const navItems = [
     { name: "上传错题", href: "/", icon: <Home size={20} /> },
     { name: "错题库", href: "/library", icon: <BookOpen size={20} /> },
-    { name: "收藏夹", href: "/collections", icon: <Star size={20} /> }, // 👈 新增
+    { name: "收藏夹", href: "/collections", icon: <Star size={20} /> },
     { name: "知识星云", href: "/graph", icon: <Network size={20} /> },
     { name: "今日复习", href: "/review", icon: <CalendarCheck size={20} /> },
   ];
@@ -29,7 +32,7 @@ export default function Navbar() {
       <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
         {/* Logo */}
         <div className="text-2xl font-bold text-blue-600 flex items-center gap-2">
-          InsightNote 🧠
+          <Link href="/">InsightNote 🧠</Link>
         </div>
 
         {/* 中间导航按钮 */}

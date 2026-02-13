@@ -1,12 +1,12 @@
 import os
 import json
-import re
 import base64
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
+import httpx 
 
 # 1. 加载环境变量
 load_dotenv()
@@ -22,131 +22,114 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 模型定义 ---
+# --- 配置 ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://api.gptsapi.net/v1") 
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash") # 即使是2.5也会兼容
+
+# --- Prompt ---
+STREAM_SYSTEM_PROMPT = """
+你是一位严谨的学术教授。
+请严格按照以下 Markdown 格式输出（不要使用 JSON，不要输出多余的寒暄）：
+
+# 题目
+(这里提取或复述题目)
+
+# 深度解析
+(这里进行详细推导，支持 LaTeX，例如 $E=mc^2$)
+
+# 最终答案
+(这里写最终结论)
+
+# 标签
+(标签1, 标签2, 标签3)
+"""
+
 class Question(BaseModel):
     text: str
 
-# --- 配置密钥 ---
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+# 🛠️ 客户端构造器 (与 test_api.py 保持一致)
+def get_client():
+    http_client = httpx.Client(trust_env=False) # 强制直连
+    return OpenAI(
+        api_key=GEMINI_API_KEY, 
+        base_url=GEMINI_BASE_URL,
+        timeout=120.0, 
+        http_client=http_client
+    )
 
-SILICON_API_KEY = os.getenv("SILICON_API_KEY")
-SILICON_BASE_URL = os.getenv("SILICON_BASE_URL", "https://api.siliconflow.cn/v1")
-SILICON_VISION_MODEL = os.getenv("SILICON_VISION_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct") 
-
-# --- 工具函数：JSON 清洗 ---
-def clean_json_response(content: str):
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        pass
-    try:
-        match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
-        json_str = match.group(1) if match else content
-        # 修复 LaTeX 反斜杠
-        json_str = json_str.replace('\\', '\\\\').replace('\\\\\\\\', '\\\\') 
-        start = json_str.find('{')
-        end = json_str.rfind('}')
-        if start != -1 and end != -1:
-            return json.loads(json_str[start:end+1])
-    except Exception as e:
-        print(f"JSON Repair Failed: {e}")
-
-    return {
-        "title": "解析结果 (自动修复)",
-        "conclusion": "请查看下方详细解析",
-        "analysis": content,
-        "tags": ["AI解析"]
-    }
-
-# ===========================
-# 🚀 AI 智能解析接口
-# ===========================
-
+# --- 纯文本提问接口 (非流式) ---
 @app.post("/ask_ai")
-def ask_ai(question: Question):
+async def ask_ai(question: Question):
+    client = get_client()
+    print(f"🤖 收到文本提问，正在思考 (Model: {GEMINI_MODEL})...")
+    
     try:
-        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-        system_prompt = """
-        你是一位严谨的学术教授。
-        【要求】：
-        1. 先进行深度解析(analysis)，再得出结论(conclusion)。
-        2. JSON字符串中 LaTeX 反斜杠必须转义 (例如 \\\\frac)。
-        """
-        response = client.chat.completions.create(
-            model="deepseek-chat",
+        # ⚡️ stream=False (稳如老狗模式)
+        completion = client.chat.completions.create(
+            model=GEMINI_MODEL,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": STREAM_SYSTEM_PROMPT},
                 {"role": "user", "content": question.text}
             ],
-            stream=False,
-            response_format={ "type": "json_object" } 
+            stream=False, 
+            temperature=0.7 
         )
-        return clean_json_response(response.choices[0].message.content)
-    except Exception as e:
-        print(f"DeepSeek Error: {e}")
-        return {"error": str(e)}
+        # 获取完整内容
+        content = completion.choices[0].message.content
+        print("✅ 思考完成，正在返回数据...")
+        return Response(content=content, media_type="text/plain")
 
+    except Exception as e:
+        error_msg = f"System Error: {str(e)}"
+        print(f"❌ 发生错误: {error_msg}")
+        return Response(content=error_msg, media_type="text/plain")
+
+# --- 图片分析接口 (非流式) ---
 @app.post("/analyze_image")
 async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
-    try:
-        image_content = await image.read()
-        base64_image = base64.b64encode(image_content).decode('utf-8')
+    print(f"📷 收到图片，正在上传并解析 (Model: {GEMINI_MODEL})...")
+    
+    image_content = await image.read()
+    base64_image = base64.b64encode(image_content).decode('utf-8')
+    media_type = image.content_type or "image/jpeg"
 
-        # Step 1: Qwen (眼)
-        client_vision = OpenAI(api_key=SILICON_API_KEY, base_url=SILICON_BASE_URL)
-        ocr_prompt = """
-        你是一个数据提取专家。
-        1. 【文本提取】：提取所有题目文字。
-        2. 【表格提取】：⚠️ 务必逐行读取表格数据，不要遗漏。
-        3. 【视觉描述】：描述几何或拓扑结构。
-        """
-        vision_response = client_vision.chat.completions.create(
-            model=SILICON_VISION_MODEL, 
+    client = get_client()
+
+    try:
+        # ⚡️ stream=False (稳如老狗模式)
+        completion = client.chat.completions.create(
+            model=GEMINI_MODEL, 
             messages=[
+                {"role": "system", "content": STREAM_SYSTEM_PROMPT},
                 {
-                    "role": "user",
+                    "role": "user", 
                     "content": [
-                        {"type": "text", "text": ocr_prompt}, 
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-                    ],
+                        {"type": "text", "text": text},
+                        {
+                            "type": "image_url", 
+                            "image_url": {
+                                "url": f"data:{media_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
                 }
             ],
-            stream=False,
-            temperature=0.01,
+            stream=False, 
+            temperature=0.7
         )
-        visual_context = vision_response.choices[0].message.content
-
-        # Step 2: DeepSeek (脑)
-        client_logic = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-        final_system_prompt = """
-        你是一位严谨的教授。
-        【JSON 格式 (顺序重要)】：
-        {
-          "title": "OCR题目文本",
-          "analysis": "详细解析（先写这里，支持LaTeX）",
-          "conclusion": "最终答案（最后写这里）",
-          "tags": ["知识点"]
-        }
-        ⚠️ JSON 中 LaTeX 反斜杠必须双写 (\\\\times)。
-        """
-        full_query = f"【视觉信息】:\n{visual_context}\n【用户指令】:\n{text}"
-        
-        logic_response = client_logic.chat.completions.create(
-            model="deepseek-chat", 
-            messages=[
-                {"role": "system", "content": final_system_prompt},
-                {"role": "user", "content": full_query}
-            ],
-            stream=False,
-            response_format={ "type": "json_object" }
-        )
-        return clean_json_response(logic_response.choices[0].message.content)
+        content = completion.choices[0].message.content
+        print("✅ 解析完成，正在返回数据...")
+        return Response(content=content, media_type="text/plain")
 
     except Exception as e:
-        print(f"Error: {e}")
-        return {"title": "Error", "conclusion": "系统异常", "analysis": str(e), "tags": ["Error"]}
+        error_msg = f"System Error: {str(e)}"
+        print(f"❌ 发生错误: {error_msg}")
+        return Response(content=error_msg, media_type="text/plain")
 
 if __name__ == "__main__":
     import uvicorn
+    # 打印一下当前的配置，方便二次确认
+    print(f"🚀 服务启动中...")
+    print(f"Using Model: {GEMINI_MODEL}")
     uvicorn.run(app, host="0.0.0.0", port=8000)
