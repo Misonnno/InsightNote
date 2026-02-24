@@ -13,7 +13,7 @@ jobs:
         run: |
           # 加上 -v 可以看到详细的请求过程，方便排查
           # 使用 API 具体的 URL 路径
-          RESPONSE=$(curl -s -v -X GET "https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/notes?select=id&limit=1" \
+          RESPONSE=$(curl -s -v -X GET "https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/collections?select=*&limit=1" \
           -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
           -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
           -H "Range: 0-9")
