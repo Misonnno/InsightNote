@@ -2,8 +2,8 @@ name: Keep Supabase Active
 
 on:
   schedule:
-    - cron: '0 8 * * *' # 每天 UTC 8:00 自动运行
-  workflow_dispatch: # 允许你手动点击按钮触发测试
+    - cron: '0 8 * * *'
+  workflow_dispatch:
 
 jobs:
   ping:
@@ -11,10 +11,19 @@ jobs:
     steps:
       - name: Send Authenticated Query
         run: |
-          # 请求 notes 表的一条数据，并加上随机时间戳参数防止被缓存
-          # 去掉了 -I，改用真正的数据请求
-          curl -X GET "https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/notes?select=id&limit=1" \
+          # 加上 -v 可以看到详细的请求过程，方便排查
+          # 使用 API 具体的 URL 路径
+          RESPONSE=$(curl -s -v -X GET "https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/notes?select=id&limit=1" \
           -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
           -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
-          -G --data-urlencode "t=$(date +%s)" \
-          --fail || exit 1
+          -H "Range: 0-9")
+          
+          echo "Response Body: $RESPONSE"
+          
+          # 如果返回结果包含 id，说明成功了
+          if [[ $RESPONSE == *"id"* ]]; then
+            echo "Successfully queried the database."
+          else
+            echo "Query failed or returned empty. Check your RLS policies or API Key."
+            exit 1
+          fi
