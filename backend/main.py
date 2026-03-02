@@ -25,10 +25,10 @@ app.add_middleware(
 # --- 配置 ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://api.gptsapi.net/v1") 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash") # 即使是2.5也会兼容
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-# --- Prompt ---
-STREAM_SYSTEM_PROMPT = """
+# --- 基础 Prompt ---
+BASE_SYSTEM_PROMPT = """
 你是一位严谨的学术教授。
 请严格按照以下 Markdown 格式输出（不要使用 JSON，不要输出多余的寒暄）：
 
@@ -42,15 +42,17 @@ STREAM_SYSTEM_PROMPT = """
 (这里写最终结论)
 
 # 标签
-(标签1, 标签2, 标签3)
+(在这里输出 1-3 个标签，用逗号分隔)
 """
 
+# 🛠️ 接收前端传来的问题和已有标签
 class Question(BaseModel):
     text: str
+    existing_tags: str = "" 
 
-# 🛠️ 客户端构造器 (与 test_api.py 保持一致)
+# 🛠️ 客户端构造器
 def get_client():
-    http_client = httpx.Client(trust_env=False) # 强制直连
+    http_client = httpx.Client(trust_env=False) 
     return OpenAI(
         api_key=GEMINI_API_KEY, 
         base_url=GEMINI_BASE_URL,
@@ -58,24 +60,33 @@ def get_client():
         http_client=http_client
     )
 
-# --- 纯文本提问接口 (非流式) ---
+# 🛠️ 动态构建 Prompt
+def build_dynamic_prompt(existing_tags: str):
+    prompt = BASE_SYSTEM_PROMPT
+    if existing_tags:
+        print(f"🔍 [Debug] 接收到前端传来的历史标签: {existing_tags}")
+        prompt += f"\n\n【重要指令：标签生成规范】\n当前错题本中已存在的标签库有：[{existing_tags}]。\n请绝对优先从上述标签库中选择最匹配的标签！严禁随意创造同义词！如果完全不匹配才可使用新标签。"
+    else:
+        prompt += "\n\n【重要指令：标签生成规范】\n请使用最标准、简短的学科词汇（如：高等数学，数据结构等）作为标签。"
+    return prompt
+
+# --- 纯文本提问接口 ---
 @app.post("/ask_ai")
 async def ask_ai(question: Question):
     client = get_client()
+    dynamic_prompt = build_dynamic_prompt(question.existing_tags)
     print(f"🤖 收到文本提问，正在思考 (Model: {GEMINI_MODEL})...")
     
     try:
-        # ⚡️ stream=False (稳如老狗模式)
         completion = client.chat.completions.create(
             model=GEMINI_MODEL,
             messages=[
-                {"role": "system", "content": STREAM_SYSTEM_PROMPT},
+                {"role": "system", "content": dynamic_prompt},
                 {"role": "user", "content": question.text}
             ],
             stream=False, 
-            temperature=0.7 
+            temperature=0.1 # 极低温度，确保标签稳定
         )
-        # 获取完整内容
         content = completion.choices[0].message.content
         print("✅ 思考完成，正在返回数据...")
         return Response(content=content, media_type="text/plain")
@@ -85,9 +96,13 @@ async def ask_ai(question: Question):
         print(f"❌ 发生错误: {error_msg}")
         return Response(content=error_msg, media_type="text/plain")
 
-# --- 图片分析接口 (非流式) ---
+# --- 图片分析接口 ---
 @app.post("/analyze_image")
-async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
+async def analyze_image(
+    text: str = Form(...), 
+    existing_tags: str = Form(""), # 接收前端通过 FormData 传来的标签
+    image: UploadFile = File(...)
+):
     print(f"📷 收到图片，正在上传并解析 (Model: {GEMINI_MODEL})...")
     
     image_content = await image.read()
@@ -95,13 +110,13 @@ async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
     media_type = image.content_type or "image/jpeg"
 
     client = get_client()
+    dynamic_prompt = build_dynamic_prompt(existing_tags)
 
     try:
-        # ⚡️ stream=False (稳如老狗模式)
         completion = client.chat.completions.create(
             model=GEMINI_MODEL, 
             messages=[
-                {"role": "system", "content": STREAM_SYSTEM_PROMPT},
+                {"role": "system", "content": dynamic_prompt},
                 {
                     "role": "user", 
                     "content": [
@@ -116,7 +131,7 @@ async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
                 }
             ],
             stream=False, 
-            temperature=0.7
+            temperature=0.1 # 极低温度
         )
         content = completion.choices[0].message.content
         print("✅ 解析完成，正在返回数据...")
@@ -129,7 +144,5 @@ async def analyze_image(text: str = Form(...), image: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    # 打印一下当前的配置，方便二次确认
     print(f"🚀 服务启动中...")
-    print(f"Using Model: {GEMINI_MODEL}")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -26,8 +26,6 @@ const parseStreamToAIResponse = (text: string): AIResponse => {
     tags: []
   };
 
-  // 1. 尝试寻找各个章节的起始位置
-  // 匹配规则：不管是 # 还是 ## 还是加粗，只要包含关键字符就识别
   const findPos = (keywords: string[]) => {
     for (const kw of keywords) {
       const index = text.indexOf(kw);
@@ -41,32 +39,25 @@ const parseStreamToAIResponse = (text: string): AIResponse => {
   const conclusionMarker = findPos(["# 最终答案", "## 最终答案", "**最终答案**", "最终答案："]);
   const tagsMarker = findPos(["# 标签", "## 标签", "**标签**", "标签："]);
 
-  // 2. 切片逻辑：根据标记位置动态切开文本
-  // 题目部分
   if (titleMarker) {
     const end = analysisMarker?.index || conclusionMarker?.index || tagsMarker?.index || text.length;
     result.title = text.substring(titleMarker.index + titleMarker.kw.length, end).trim();
   }
 
-  // 解析部分 (最重要：如果没识别出结论，所有的字都先塞给解析过程)
   if (analysisMarker) {
     const end = conclusionMarker?.index || tagsMarker?.index || text.length;
     result.analysis = text.substring(analysisMarker.index + analysisMarker.kw.length, end).trim();
   } else if (titleMarker) {
-    // 还没看到“深度解析”字样？先把题目之后的所有内容都放在解析框里，让用户看到实时输出
     result.analysis = text.substring(titleMarker.index + titleMarker.kw.length).trim();
   } else {
-    // 啥标记都没看到？那就直接把全文给解析框
     result.analysis = text.trim();
   }
 
-  // 结论部分
   if (conclusionMarker) {
     const end = tagsMarker?.index || text.length;
     result.conclusion = text.substring(conclusionMarker.index + conclusionMarker.kw.length, end).trim();
   }
 
-  // 标签部分
   if (tagsMarker) {
     const rawTags = text.substring(tagsMarker.index + tagsMarker.kw.length).trim();
     result.tags = rawTags.replace(/[()（）*#]/g, "").split(/,|，|\s+/).filter(t => t);
@@ -102,6 +93,35 @@ export default function Home() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  // 🌟 新增：从 Supabase 动态拉取当前用户已用过的标签
+  const fetchExistingTags = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return ""; // 没登录就不传
+
+      // 获取当前用户的所有 tags 字段
+      const { data, error } = await supabase
+        .from('notes')
+        .select('tags')
+        .eq('user_id', session.user.id);
+        
+      if (error || !data) return "";
+
+      const tagSet = new Set<string>();
+      data.forEach(row => {
+        if (Array.isArray(row.tags)) {
+          row.tags.forEach(t => { if(t) tagSet.add(t) });
+        }
+      });
+      
+      // 取前 40 个常用标签拼接成字符串发给 AI
+      return Array.from(tagSet).slice(0, 40).join(", ");
+    } catch (e) {
+      console.error("获取历史标签失败", e);
+      return "";
+    }
+  };
+
   const askAI = async () => {
     if (!question.trim() && !selectedImage) {
       alert("请输入问题或上传图片");
@@ -109,31 +129,35 @@ export default function Home() {
     }
 
     setLoading(true);
-    // 初始化状态
     setAiResult({
       title: "准备中...",
-      analysis: "正在建立连接...", // 给用户即时反馈
+      analysis: "正在抓取错题本历史标签并建立连接...", 
       conclusion: "",
       tags: []
     });
 
     try {
+      // 1. 获取现有标签
+      const tagsString = await fetchExistingTags();
+
       const endpoint = selectedImage 
         ? "http://127.0.0.1:8000/analyze_image" 
         : "http://127.0.0.1:8000/ask_ai";
 
       let response;
 
+      // 2. 发送请求给后端，带上 existing_tags
       if (selectedImage) {
         const formData = new FormData();
         formData.append("text", question || "请详细解析这道题");
+        formData.append("existing_tags", tagsString); // 加入标签
         formData.append("image", selectedImage);
         response = await fetch(endpoint, { method: "POST", body: formData });
       } else {
         response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: question }),
+          body: JSON.stringify({ text: question, existing_tags: tagsString }), // 加入标签
         });
       }
 
@@ -151,7 +175,6 @@ export default function Home() {
         if (value) {
           const chunk = decoder.decode(value, { stream: true });
           fullText += chunk;
-          // 每次收到数据，都强制更新 UI
           setAiResult(parseStreamToAIResponse(fullText));
         }
       }
@@ -280,7 +303,6 @@ export default function Home() {
                 <h3 className="font-bold text-gray-800">识别信息</h3>
               </div>
               <div className="prose prose-blue max-w-none text-gray-700 bg-gray-50 p-4 rounded-xl border border-gray-100">
-                 {/* 如果还没有解析出题目，显示占位符或 loading 状态 */}
                  {aiResult.title === "题目识别中..." ? <span className="text-gray-400 italic">正在从内容中提取题目...</span> : <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{aiResult.title}</ReactMarkdown>}
               </div>
             </div>
@@ -291,7 +313,7 @@ export default function Home() {
                 <h3 className="font-bold text-green-900">最终答案</h3>
               </div>
               <div className="text-xl font-bold text-green-800 leading-relaxed">
-                 {aiResult.conclusion === "计算中..." ? <span className="text-gray-400 text-base font-normal italic">AI 正在计算结论...</span> : <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{aiResult.conclusion}</ReactMarkdown>}
+                 {aiResult.conclusion === "AI 正在计算结论..." ? <span className="text-gray-400 text-base font-normal italic">AI 正在计算结论...</span> : <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{aiResult.conclusion}</ReactMarkdown>}
               </div>
             </div>
 
@@ -308,7 +330,6 @@ export default function Home() {
               </div>
               
               <div className="markdown-body text-gray-700 leading-relaxed space-y-4">
-                {/* 这里会实时显示所有内容，不管 AI 格式对不对 */}
                 <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                   {aiResult.analysis}
                 </ReactMarkdown>
