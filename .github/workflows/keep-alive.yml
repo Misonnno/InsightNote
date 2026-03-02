@@ -2,17 +2,28 @@ name: Keep Supabase Active
 
 on:
   schedule:
-    # 每天 UTC 时间上午 8 点运行一次 (你可以根据需要调整)
     - cron: '0 8 * * *'
-  # 允许你在 GitHub Actions 页面手动点击按钮触发测试
   workflow_dispatch:
 
 jobs:
-  cron:
+  ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Call API to prevent pause
+      - name: Send Authenticated Query
         run: |
-          # 将下面的 URL 替换为你项目的真实 URL
-          # 通常是 https://<你的项目ID>.supabase.co/rest/v1/
-          curl -I https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/
+          # 加上 -v 可以看到详细的请求过程，方便排查
+          # 使用 API 具体的 URL 路径
+          RESPONSE=$(curl -s -v -X GET "https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/collections?select=*&limit=1" \
+          -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+          -H "Range: 0-9")
+          
+          echo "Response Body: $RESPONSE"
+          
+          # 如果返回结果包含 id，说明成功了
+          if [[ $RESPONSE == *"id"* ]]; then
+            echo "Successfully queried the database."
+          else
+            echo "Query failed or returned empty. Check your RLS policies or API Key."
+            exit 1
+          fi
