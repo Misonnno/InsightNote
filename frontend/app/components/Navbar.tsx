@@ -1,22 +1,16 @@
 "use client";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Home, BookOpen, Network, CalendarCheck, LogOut, Star } from "lucide-react";
-import { supabase } from "../../supabase";
+import { usePathname } from "next/navigation";
+// 引入 User 图标，移除 LogOut
+import { Home, BookOpen, Network, CalendarCheck, User, Star } from "lucide-react";
 
 export default function Navbar() {
   const pathname = usePathname(); 
-  const router = useRouter();
 
-  // 1. 如果在登录页，直接不渲染导航栏
+  // 如果在登录页，直接不渲染导航栏
   if (pathname === "/login") {
     return null;
   }
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
 
   // 定义导航项
   const navItems = [
@@ -36,14 +30,14 @@ export default function Navbar() {
         </div>
 
         {/* 中间导航按钮 */}
-        <div className="flex gap-1">
+        <div className="flex gap-1 overflow-x-auto no-scrollbar">
           {navItems.map((item) => {
             const isActive = pathname === item.href;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all font-medium ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all font-medium whitespace-nowrap ${
                   isActive
                     ? "bg-blue-50 text-blue-600"
                     : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
@@ -56,14 +50,18 @@ export default function Navbar() {
           })}
         </div>
 
-        {/* 右侧退出按钮 */}
-        <button
-          onClick={handleLogout}
-          className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
-          title="退出登录"
+        {/* 右侧个人中心按钮 */}
+        <Link
+          href="/profile"
+          className={`p-2 rounded-full transition-colors flex items-center justify-center ${
+            pathname === "/profile" 
+              ? "text-blue-600 bg-blue-50" 
+              : "text-gray-500 hover:text-blue-600 hover:bg-blue-50"
+          }`}
+          title="个人中心"
         >
-          <LogOut size={20} />
-        </button>
+          <User size={20} />
+        </Link>
       </div>
     </nav>
   );

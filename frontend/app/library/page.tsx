@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../../supabase"; // 确保这里路径对得上
 import ReactMarkdown from "react-markdown";
 import { Trash2, X, Calendar, Search, Image as ImageIcon, Tag, Star, Eye, EyeOff, Lightbulb, CheckCircle2, CircleDashed } from "lucide-react";
@@ -19,10 +20,13 @@ type Note = {
   is_mastered?: boolean;
 };
 
-export default function LibraryPage() {
+function LibraryContent() {
+  const searchParams = useSearchParams();
+  const initialTag = searchParams.get("tag") || "";
+
   const [notes, setNotes] = useState<Note[]>([]);
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState(initialTag);
   
   // 收藏夹相关
   const [collections, setCollections] = useState<any[]>([]);
@@ -183,5 +187,17 @@ export default function LibraryPage() {
          </div>
       )}
     </div>
+  );
+}
+
+export default function LibraryPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center text-gray-500">
+        📚 正在加载错题库...
+      </div>
+    }>
+      <LibraryContent />
+    </Suspense>
   );
 }

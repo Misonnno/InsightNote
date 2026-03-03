@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../../supabase";
 import dynamic from 'next/dynamic';
+import { useRouter } from "next/navigation";
 
 // 动态引入组件
 const KnowledgeGraph = dynamic(() => import('../components/KnowledgeGraph'), { 
@@ -15,6 +16,7 @@ const KnowledgeGraph = dynamic(() => import('../components/KnowledgeGraph'), {
 
 export default function GraphPage() {
   const [notes, setNotes] = useState<any[]>([]);
+  const router = useRouter();
 
   useEffect(() => {
     const fetchNotes = async () => {
@@ -31,7 +33,10 @@ export default function GraphPage() {
     <div className="max-w-5xl mx-auto p-6 h-[calc(100vh-100px)]">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">🌌 知识星云</h1>
       <div className="w-full h-full">
-         <KnowledgeGraph notes={notes} onTagClick={(tag) => alert(`点击了标签：${tag}，后续可以在这里跳转到筛选页`)} />
+         <KnowledgeGraph 
+            notes={notes} 
+            onTagClick={(tag) => router.push(`/library?tag=${encodeURIComponent(tag)}`)} 
+         />
       </div>
     </div>
   );
