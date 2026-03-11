@@ -1,22 +1,16 @@
 name: Keep Supabase Active
-
 on:
   schedule:
     - cron: '0 8 * * *' # 每天早上8点运行
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch: # 允许手动触发测试
 
 jobs:
-  ping-db:
+  ping:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install dependencies
-        run: npm install @supabase/supabase-js
-      - name: Run keep-active script
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: node keep-active.js # 这里指向你的逻辑代码
+      - name: Send Authenticated Request
+        run: |
+          curl -X GET "https://ndwuwthxyrfypogywfuv.supabase.co/rest/v1/notes?select=*" \
+          -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+          -L --fail
