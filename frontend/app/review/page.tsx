@@ -1,8 +1,12 @@
+// frontend/app/review/page.tsx
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../../supabase";
 import ReactMarkdown from "react-markdown";
-import { CheckCircle, XCircle, Calendar, Loader2, Trophy, Eye, EyeOff, Award } from "lucide-react";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
+import { CheckCircle, XCircle, Loader2, Trophy, Eye, EyeOff, Award, Sparkles, RefreshCw } from "lucide-react";
 
 // 复习间隔 (天数)
 const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
@@ -21,11 +25,20 @@ export default function ReviewPage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0); 
   const [isFlipped, setIsFlipped] = useState(false); 
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // --- 举一反三相关状态 ---
+  const [autoGenerateSimilar, setAutoGenerateSimilar] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedQA, setGeneratedQA] = useState<{question: string, answer: string} | null>(null);
+  const [showGeneratedAnswer, setShowGeneratedAnswer] = useState(false); // ✨ 新增：控制变式题解析的显示
 
   useEffect(() => {
     const fetchDueNotes = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
+      
+      setUserId(session.user.id);
 
       const now = new Date().toISOString();
 
@@ -43,6 +56,83 @@ export default function ReviewPage() {
     };
     fetchDueNotes();
   }, []);
+
+  useEffect(() => {
+    if (isFlipped && autoGenerateSimilar) {
+       handleGenerateSimilar();
+    }
+  }, [currentIndex, isFlipped]);
+
+  const handleGenerateSimilar = async () => {
+    setIsGenerating(true);
+    setGeneratedQA(null);
+    setShowGeneratedAnswer(false); // ✨ 每次生成新题时，把解析隐藏起来
+    
+    const currentNote = notes[currentIndex];
+    if (!currentNote) {
+        setIsGenerating(false);
+        return;
+    }
+
+    try {
+      const prompt = `请作为一名资深教师，根据以下这道题的核心考点，为我出一道“举一反三”的变式题。
+要求：
+1. 题目背景或数据与原题不同，但考察的核心知识点相同。
+2. 请提供变式题的完整题目、深度解析和最终答案。
+3. 其中的数学公式请使用严格的 LaTeX 格式（使用 $ 或 $$ 包裹）。
+
+原题内容如下：
+${currentNote.question}`;
+
+      const response = await fetch("http://localhost:8000/ask_ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: prompt,
+          existing_tags: "" 
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("网络响应异常");
+      }
+
+      const textResponse = await response.text();
+
+      // ✨✨✨ 新增：文本截断逻辑 ✨✨✨
+      // 根据后端的 BASE_SYSTEM_PROMPT，寻找“深度解析”作为分割点
+      const splitMatch = textResponse.match(/#+\s*深度解析|#+\s*解析|\*\*深度解析\*\*|\*\*解析\*\*/);
+      
+      let qPart = textResponse;
+      let aPart = "";
+
+      if (splitMatch) {
+        const splitIndex = textResponse.indexOf(splitMatch[0]);
+        qPart = textResponse.substring(0, splitIndex).trim(); // 题目部分
+        aPart = textResponse.substring(splitIndex).trim();    // 解析部分
+      } else {
+        // 如果AI没按格式出牌，默认都放进题目，解析给个提示
+        qPart = textResponse;
+        aPart = "⚠️ AI 未明确使用 Markdown 标题区分解析，请参考上方完整内容。";
+      }
+
+      setGeneratedQA({
+        question: qPart,
+        answer: aPart 
+      });
+
+    } catch (error) {
+      console.error("❌ 生成变式题失败:", error);
+      setGeneratedQA({
+        question: "【生成失败】",
+        answer: "请求后端 API 失败，请检查你的后端服务 (main.py) 是否正常运行在 8000 端口，且跨域配置正确。"
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const handleReview = async (result: "forgot" | "remembered" | "mastered") => {
     const currentNote = notes[currentIndex];
@@ -69,9 +159,12 @@ export default function ReviewPage() {
     const nextIndex = currentIndex + 1;
     setCurrentIndex(nextIndex);
     setIsFlipped(false);
+    
+    // ✨ 切换下一题时，重置所有变式题状态
+    setGeneratedQA(null); 
+    setShowGeneratedAnswer(false);
 
-    // 2. 异步更新数据库
-    const { error } = await supabase // 👈 记得加上 const { error } = 
+    const { error } = await supabase 
       .from("notes")
       .update({
         review_stage: newStage,
@@ -80,12 +173,29 @@ export default function ReviewPage() {
       })
       .eq("id", currentNote.id);
 
-    // 加入调试代码
-    if (error) {
-        console.error("❌ 数据库保存失败！", error.message);
-        alert("保存失败，请检查控制台：" + error.message);
-    } else {
-        console.log("✅ 保存成功！下次复习时间:", nextDate.toLocaleString());
+    if (userId && !error) {
+      const d = new Date();
+      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+      const { data: logData } = await supabase
+        .from("study_logs")
+        .select("questions_reviewed")
+        .eq("user_id", userId)
+        .eq("action_date", today)
+        .single();
+
+      let newCount = 1;
+      if (logData) {
+        newCount = logData.questions_reviewed + 1; 
+      }
+
+      await supabase
+        .from("study_logs")
+        .upsert({
+           user_id: userId,
+           action_date: today,
+           questions_reviewed: newCount
+        }, { onConflict: 'user_id, action_date' });
     }
 
     if (nextIndex >= notes.length && typeof window !== "undefined" && (window as any).confetti) {
@@ -98,9 +208,7 @@ export default function ReviewPage() {
   if (notes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
-        <div className="bg-green-100 p-6 rounded-full mb-6 animate-in zoom-in duration-500">
-            <Trophy size={64} className="text-green-600" />
-        </div>
+        <div className="bg-green-100 p-6 rounded-full mb-6 animate-in zoom-in duration-500"><Trophy size={64} className="text-green-600" /></div>
         <h2 className="text-2xl font-bold text-gray-800 mb-2">太棒了！今日任务已清空</h2>
         <p className="text-gray-500 max-w-md">所有到期的错题都已复习完毕。</p>
         <a href="/" className="mt-8 px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition">去上传新题</a>
@@ -111,9 +219,7 @@ export default function ReviewPage() {
   if (currentIndex >= notes.length) {
     return (
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
-        <div className="bg-blue-100 p-6 rounded-full mb-6 animate-bounce">
-            <CheckCircle size={64} className="text-blue-600" />
-        </div>
+        <div className="bg-blue-100 p-6 rounded-full mb-6 animate-bounce"><CheckCircle size={64} className="text-blue-600" /></div>
         <h2 className="text-2xl font-bold text-gray-800 mb-2">本次复习完成！</h2>
         <button onClick={() => window.location.reload()} className="mt-8 px-6 py-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100">刷新试试</button>
       </div>
@@ -126,17 +232,27 @@ export default function ReviewPage() {
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 h-[calc(100vh-80px)] flex flex-col">
       
-      <div className="mb-6">
-        <div className="flex justify-between text-sm text-gray-500 mb-2">
-            <span>今日待复习</span>
-            <span>{currentIndex + 1} / {notes.length}</span>
+      {/* 顶部进度条 & 举一反三设置 */}
+      <div className="mb-6 flex flex-col gap-2">
+        <div className="flex justify-between items-center text-sm text-gray-500 mb-1">
+            <span className="font-medium text-gray-700">今日待复习 ({currentIndex + 1} / {notes.length})</span>
+            
+            <label className="flex items-center cursor-pointer gap-2 bg-purple-50 px-3 py-1 rounded-full border border-purple-100">
+              <span className="text-xs font-bold text-purple-600 flex items-center gap-1"><Sparkles size={14}/> 自动举一反三</span>
+              <div className="relative">
+                <input type="checkbox" className="sr-only" checked={autoGenerateSimilar} onChange={() => setAutoGenerateSimilar(!autoGenerateSimilar)}/>
+                <div className={`block w-8 h-4 rounded-full transition-colors ${autoGenerateSimilar ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
+                <div className={`absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform ${autoGenerateSimilar ? 'transform translate-x-4' : ''}`}></div>
+              </div>
+            </label>
         </div>
-        <div className="w-full bg-gray-200 rounded-full h-2.5">
-            <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
+        <div className="w-full bg-gray-200 rounded-full h-2">
+            <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
         </div>
       </div>
 
       <div className="flex-1 bg-white rounded-3xl shadow-lg border border-gray-100 overflow-hidden flex flex-col relative">
+         {/* 原题目区域 */}
          <div className="p-8 border-b bg-gradient-to-b from-white to-gray-50/50 flex-1 overflow-y-auto">
             <div className="flex items-center gap-2 mb-4">
                 <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-md font-bold">阶段 {currentNote.review_stage}</span>
@@ -146,26 +262,77 @@ export default function ReviewPage() {
                     <img src={currentNote.image_url} className="max-h-48 rounded-lg shadow-sm object-contain bg-white border" alt="题目图片"/>
                 </div>
             )}
-            <h2 className="text-xl md:text-2xl font-bold text-gray-800 leading-relaxed whitespace-pre-wrap">{currentNote.question}</h2>
+            <div className="text-xl md:text-2xl font-bold text-gray-800 leading-relaxed whitespace-pre-wrap markdown-body">
+              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {currentNote.question}
+              </ReactMarkdown>
+            </div>
          </div>
 
          {isFlipped ? (
-             <div className="flex-1 bg-blue-50/30 p-8 overflow-y-auto animate-in slide-in-from-bottom-10 fade-in duration-300">
-                 {/* ✨✨✨ 修改部分：标题栏增加了收起按钮 ✨✨✨ */}
+             <div className="flex-1 p-8 overflow-y-auto animate-in slide-in-from-bottom-10 fade-in duration-300 bg-blue-50/30">
+                 {/* 原题解析 */}
                  <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2 text-green-600 font-bold">
                         <CheckCircle size={20} /> 解析 / Answer
                     </div>
-                    {/* 点击这个按钮，把 isFlipped 设回 false */}
-                    <button 
-                        onClick={() => setIsFlipped(false)}
-                        className="flex items-center gap-1 text-xs font-bold text-gray-500 bg-white/50 px-3 py-1.5 rounded-full hover:bg-white hover:text-blue-600 transition-colors shadow-sm"
-                    >
+                    <button onClick={() => setIsFlipped(false)} className="flex items-center gap-1 text-xs font-bold text-gray-500 bg-white/50 px-3 py-1.5 rounded-full hover:bg-white hover:text-blue-600 transition-colors shadow-sm">
                         <EyeOff size={14}/> 收起
                     </button>
                  </div>
-                 
-                 <div className="markdown-body text-gray-700"><ReactMarkdown>{currentNote.answer}</ReactMarkdown></div>
+                 <div className="markdown-body text-gray-700 mb-6">
+                   <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                     {currentNote.answer}
+                   </ReactMarkdown>
+                 </div>
+
+                 {/* --- 举一反三模块 --- */}
+                 <div className="mt-8 pt-6 border-t border-blue-100">
+                    {!generatedQA && !isGenerating && (
+                      <button onClick={handleGenerateSimilar} className="w-full py-3 flex items-center justify-center gap-2 text-purple-600 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl font-bold transition-colors">
+                        <Sparkles size={18} /> 没完全懂？让 AI 举一反三出一道变式题
+                      </button>
+                    )}
+
+                    {isGenerating && (
+                      <div className="flex flex-col items-center justify-center py-6 text-purple-500 gap-3">
+                        <Loader2 className="animate-spin" size={28} />
+                        <span className="text-sm font-medium">AI 正在深度分析考点并生成新题...</span>
+                      </div>
+                    )}
+
+                    {generatedQA && (
+                      <div className="bg-purple-50/50 border border-purple-200 rounded-xl p-5 animate-in fade-in zoom-in">
+                        <div className="flex items-center gap-2 text-purple-700 font-bold mb-3">
+                          <Sparkles size={18} /> AI 变式训练
+                          <button onClick={handleGenerateSimilar} className="ml-auto text-purple-400 hover:text-purple-600" title="换一题"><RefreshCw size={14} /></button>
+                        </div>
+                        
+                        {/* AI 变式题题目 */}
+                        <div className="text-gray-800 font-medium mb-4 markdown-body">
+                          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                            {generatedQA.question}
+                          </ReactMarkdown>
+                        </div>
+
+                        {/* ✨ AI 变式题解析：按需显示 */}
+                        {!showGeneratedAnswer ? (
+                          <button 
+                            onClick={() => setShowGeneratedAnswer(true)}
+                            className="w-full py-2.5 bg-white border border-purple-200 text-purple-600 hover:bg-purple-100 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 shadow-sm"
+                          >
+                            <Eye size={16} /> 查看变式题解析
+                          </button>
+                        ) : (
+                          <div className="bg-white p-4 rounded-lg border border-purple-100 text-sm text-gray-600 markdown-body animate-in slide-in-from-top-2 fade-in">
+                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                              {generatedQA.answer}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                 </div>
              </div>
          ) : (
              <div className="h-1/3 flex items-center justify-center bg-gray-50 border-t border-dashed border-gray-200">
@@ -176,18 +343,17 @@ export default function ReviewPage() {
          )}
       </div>
 
+      {/* 底部评分按钮 */}
       {isFlipped && (
           <div className="mt-6 grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-4">
             <button onClick={() => handleReview("forgot")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 active:scale-95 transition-all">
                 <XCircle size={24} className="mb-1" />
                 <span className="font-bold text-sm">忘了</span>
             </button>
-
             <button onClick={() => handleReview("remembered")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-green-50 text-green-600 border border-green-100 hover:bg-green-100 active:scale-95 transition-all">
                 <CheckCircle size={24} className="mb-1" />
                 <span className="font-bold text-sm">记得</span>
             </button>
-
             <button onClick={() => handleReview("mastered")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-100 active:scale-95 transition-all">
                 <Award size={24} className="mb-1" />
                 <span className="font-bold text-sm">已掌握</span>

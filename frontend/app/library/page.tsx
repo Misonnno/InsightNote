@@ -1,7 +1,8 @@
+// frontend/app/library/page.tsx
 "use client";
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "../../supabase"; // 确保这里路径对得上
+import { supabase } from "../../supabase"; 
 import ReactMarkdown from "react-markdown";
 import { Trash2, X, Calendar, Search, Image as ImageIcon, Tag, Star, Eye, EyeOff, Lightbulb, CheckCircle2, CircleDashed } from "lucide-react";
 import remarkMath from "remark-math";
@@ -131,7 +132,12 @@ function LibraryContent() {
             <div key={note.id} onClick={() => openNoteDetail(note)} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 cursor-pointer flex justify-between items-start group transition-all">
                 <div className="flex-1 min-w-0 pr-4">
                     <div className="flex items-center gap-2 mb-2">
-                        <p className="font-bold text-gray-800 text-lg line-clamp-1 group-hover:text-blue-600 transition-colors">{note.question}</p>
+                        {/* ✨ 修改点：错题列表标题也套用 Markdown 解析公式，为了防止换行破坏样式使用了 components 属性 */}
+                        <div className="font-bold text-gray-800 text-lg line-clamp-1 group-hover:text-blue-600 transition-colors">
+                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} components={{ p: "span" }}>
+                                {note.question}
+                            </ReactMarkdown>
+                        </div>
                         {note.image_url && <ImageIcon size={16} className="text-blue-400 flex-shrink-0" />}
                     </div>
                     <div className="flex flex-wrap gap-2 items-center">
@@ -163,7 +169,15 @@ function LibraryContent() {
              </div>
              <div className="p-6 overflow-y-auto">
                 {selectedNote.image_url && <div className="mb-6 bg-gray-50 p-3 rounded-xl border border-gray-200"><img src={selectedNote.image_url} alt="错题原图" className="w-full max-h-[400px] object-contain rounded-lg shadow-sm bg-white" /></div>}
-                <div className="mb-6"><h4 className="text-sm font-bold text-blue-600 mb-2 uppercase tracking-wide">题目 / Question</h4><p className="text-gray-900 font-medium text-lg leading-relaxed bg-blue-50/50 p-4 rounded-xl border border-blue-100 whitespace-pre-wrap">{selectedNote.question}</p></div>
+                <div className="mb-6">
+                    <h4 className="text-sm font-bold text-blue-600 mb-2 uppercase tracking-wide">题目 / Question</h4>
+                    {/* ✨ 修改点：详情弹窗里的题目套用 Markdown 解析公式 */}
+                    <div className="text-gray-900 font-medium text-lg leading-relaxed bg-blue-50/50 p-4 rounded-xl border border-blue-100 whitespace-pre-wrap markdown-body">
+                        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                            {selectedNote.question}
+                        </ReactMarkdown>
+                    </div>
+                </div>
                 <div>
                     <div className="flex items-center justify-between mb-2"><h4 className="text-sm font-bold text-green-600 uppercase tracking-wide">AI 深度解析 / Analysis</h4><button onClick={() => setShowAnalysis(!showAnalysis)} className="flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors">{showAnalysis ? <EyeOff size={14}/> : <Eye size={14}/>}{showAnalysis ? "隐藏解析" : "查看解析"}</button></div>
                     {showAnalysis ? <div className="markdown-body bg-gray-50 p-4 rounded-xl border border-gray-100 text-gray-700 animate-in fade-in slide-in-from-top-2">
