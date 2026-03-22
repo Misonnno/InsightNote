@@ -6,9 +6,8 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { CheckCircle, XCircle, Loader2, Trophy, Eye, EyeOff, Award, Sparkles, RefreshCw } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, Trophy, Eye, EyeOff, Award, Sparkles, RefreshCw, Edit3, Save } from "lucide-react";
 
-// 复习间隔 (天数)
 const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
 
 type Note = {
@@ -18,6 +17,7 @@ type Note = {
   image_url?: string;
   review_stage: number;
   next_review_at: string;
+  user_note?: string; // ✨ 新增：用户笔记字段
 };
 
 export default function ReviewPage() {
@@ -31,7 +31,11 @@ export default function ReviewPage() {
   const [autoGenerateSimilar, setAutoGenerateSimilar] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedQA, setGeneratedQA] = useState<{question: string, answer: string} | null>(null);
-  const [showGeneratedAnswer, setShowGeneratedAnswer] = useState(false); // ✨ 新增：控制变式题解析的显示
+  const [showGeneratedAnswer, setShowGeneratedAnswer] = useState(false); 
+
+  // --- 笔记/批注相关状态 ---
+  const [isEditingNote, setIsEditingNote] = useState(false);
+  const [tempNoteText, setTempNoteText] = useState("");
 
   useEffect(() => {
     const fetchDueNotes = async () => {
@@ -63,10 +67,30 @@ export default function ReviewPage() {
     }
   }, [currentIndex, isFlipped]);
 
+  // ✨ 保存笔记功能
+  const handleSaveNote = async () => {
+    const currentNote = notes[currentIndex];
+    if (!currentNote) return;
+
+    const { error } = await supabase
+      .from("notes")
+      .update({ user_note: tempNoteText })
+      .eq("id", currentNote.id);
+
+    if (error) {
+      alert("保存笔记失败：" + error.message);
+    } else {
+      const updatedNotes = [...notes];
+      updatedNotes[currentIndex].user_note = tempNoteText;
+      setNotes(updatedNotes);
+      setIsEditingNote(false);
+    }
+  };
+
   const handleGenerateSimilar = async () => {
     setIsGenerating(true);
     setGeneratedQA(null);
-    setShowGeneratedAnswer(false); // ✨ 每次生成新题时，把解析隐藏起来
+    setShowGeneratedAnswer(false);
     
     const currentNote = notes[currentIndex];
     if (!currentNote) {
@@ -86,48 +110,31 @@ ${currentNote.question}`;
 
       const response = await fetch("http://localhost:8000/ask_ai", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: prompt,
-          existing_tags: "" 
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: prompt, existing_tags: "" }),
       });
 
-      if (!response.ok) {
-        throw new Error("网络响应异常");
-      }
-
+      if (!response.ok) throw new Error("网络响应异常");
       const textResponse = await response.text();
 
-      // ✨✨✨ 新增：文本截断逻辑 ✨✨✨
-      // 根据后端的 BASE_SYSTEM_PROMPT，寻找“深度解析”作为分割点
       const splitMatch = textResponse.match(/#+\s*深度解析|#+\s*解析|\*\*深度解析\*\*|\*\*解析\*\*/);
-      
       let qPart = textResponse;
       let aPart = "";
 
       if (splitMatch) {
         const splitIndex = textResponse.indexOf(splitMatch[0]);
-        qPart = textResponse.substring(0, splitIndex).trim(); // 题目部分
-        aPart = textResponse.substring(splitIndex).trim();    // 解析部分
+        qPart = textResponse.substring(0, splitIndex).trim();
+        aPart = textResponse.substring(splitIndex).trim();
       } else {
-        // 如果AI没按格式出牌，默认都放进题目，解析给个提示
         qPart = textResponse;
         aPart = "⚠️ AI 未明确使用 Markdown 标题区分解析，请参考上方完整内容。";
       }
 
-      setGeneratedQA({
-        question: qPart,
-        answer: aPart 
-      });
-
+      setGeneratedQA({ question: qPart, answer: aPart });
     } catch (error) {
-      console.error("❌ 生成变式题失败:", error);
       setGeneratedQA({
         question: "【生成失败】",
-        answer: "请求后端 API 失败，请检查你的后端服务 (main.py) 是否正常运行在 8000 端口，且跨域配置正确。"
+        answer: "请求后端 API 失败，请检查你的后端服务是否运行正常。"
       });
     } finally {
       setIsGenerating(false);
@@ -160,9 +167,10 @@ ${currentNote.question}`;
     setCurrentIndex(nextIndex);
     setIsFlipped(false);
     
-    // ✨ 切换下一题时，重置所有变式题状态
+    // 切换下一题时，重置所有状态
     setGeneratedQA(null); 
     setShowGeneratedAnswer(false);
+    setIsEditingNote(false);
 
     const { error } = await supabase 
       .from("notes")
@@ -185,17 +193,11 @@ ${currentNote.question}`;
         .single();
 
       let newCount = 1;
-      if (logData) {
-        newCount = logData.questions_reviewed + 1; 
-      }
+      if (logData) newCount = logData.questions_reviewed + 1; 
 
       await supabase
         .from("study_logs")
-        .upsert({
-           user_id: userId,
-           action_date: today,
-           questions_reviewed: newCount
-        }, { onConflict: 'user_id, action_date' });
+        .upsert({ user_id: userId, action_date: today, questions_reviewed: newCount }, { onConflict: 'user_id, action_date' });
     }
 
     if (nextIndex >= notes.length && typeof window !== "undefined" && (window as any).confetti) {
@@ -210,7 +212,6 @@ ${currentNote.question}`;
       <div className="flex flex-col items-center justify-center h-[80vh] text-center p-8">
         <div className="bg-green-100 p-6 rounded-full mb-6 animate-in zoom-in duration-500"><Trophy size={64} className="text-green-600" /></div>
         <h2 className="text-2xl font-bold text-gray-800 mb-2">太棒了！今日任务已清空</h2>
-        <p className="text-gray-500 max-w-md">所有到期的错题都已复习完毕。</p>
         <a href="/" className="mt-8 px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition">去上传新题</a>
       </div>
     );
@@ -231,12 +232,9 @@ ${currentNote.question}`;
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 h-[calc(100vh-80px)] flex flex-col">
-      
-      {/* 顶部进度条 & 举一反三设置 */}
       <div className="mb-6 flex flex-col gap-2">
         <div className="flex justify-between items-center text-sm text-gray-500 mb-1">
             <span className="font-medium text-gray-700">今日待复习 ({currentIndex + 1} / {notes.length})</span>
-            
             <label className="flex items-center cursor-pointer gap-2 bg-purple-50 px-3 py-1 rounded-full border border-purple-100">
               <span className="text-xs font-bold text-purple-600 flex items-center gap-1"><Sparkles size={14}/> 自动举一反三</span>
               <div className="relative">
@@ -252,7 +250,6 @@ ${currentNote.question}`;
       </div>
 
       <div className="flex-1 bg-white rounded-3xl shadow-lg border border-gray-100 overflow-hidden flex flex-col relative">
-         {/* 原题目区域 */}
          <div className="p-8 border-b bg-gradient-to-b from-white to-gray-50/50 flex-1 overflow-y-auto">
             <div className="flex items-center gap-2 mb-4">
                 <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-md font-bold">阶段 {currentNote.review_stage}</span>
@@ -263,15 +260,12 @@ ${currentNote.question}`;
                 </div>
             )}
             <div className="text-xl md:text-2xl font-bold text-gray-800 leading-relaxed whitespace-pre-wrap markdown-body">
-              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                {currentNote.question}
-              </ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{currentNote.question}</ReactMarkdown>
             </div>
          </div>
 
          {isFlipped ? (
              <div className="flex-1 p-8 overflow-y-auto animate-in slide-in-from-bottom-10 fade-in duration-300 bg-blue-50/30">
-                 {/* 原题解析 */}
                  <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2 text-green-600 font-bold">
                         <CheckCircle size={20} /> 解析 / Answer
@@ -280,11 +274,56 @@ ${currentNote.question}`;
                         <EyeOff size={14}/> 收起
                     </button>
                  </div>
-                 <div className="markdown-body text-gray-700 mb-6">
-                   <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                     {currentNote.answer}
-                   </ReactMarkdown>
+                 <div className="markdown-body text-gray-700 mb-8">
+                   <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{currentNote.answer}</ReactMarkdown>
                  </div>
+
+                 {/* ✨✨✨ 新增：我的笔记模块 ✨✨✨ */}
+                 <div className="mb-8 bg-yellow-50/50 border border-yellow-200 rounded-2xl p-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2 text-yellow-700 font-bold">
+                            <Edit3 size={18} /> 我的笔记 / 批注
+                        </div>
+                        {!isEditingNote && (
+                            <button 
+                              onClick={() => {
+                                setTempNoteText(currentNote.user_note || "");
+                                setIsEditingNote(true);
+                              }} 
+                              className="text-yellow-600 hover:text-yellow-800 text-sm font-medium flex items-center gap-1 bg-yellow-100/50 px-3 py-1 rounded-full transition-colors"
+                            >
+                                <Edit3 size={14}/> {currentNote.user_note ? "编辑笔记" : "添加笔记"}
+                            </button>
+                        )}
+                    </div>
+                    
+                    {isEditingNote ? (
+                        <div className="flex flex-col gap-3 animate-in fade-in">
+                            <textarea
+                                value={tempNoteText}
+                                onChange={(e) => setTempNoteText(e.target.value)}
+                                className="w-full p-4 border border-yellow-300 rounded-xl bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-yellow-400 min-h-[120px] resize-y shadow-inner"
+                                placeholder="在这里写下你的解题思路、易错点提醒、公式推理..."
+                                autoFocus
+                            />
+                            <div className="flex justify-end gap-2">
+                                <button onClick={() => setIsEditingNote(false)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-xl font-medium transition-colors">取消</button>
+                                <button onClick={handleSaveNote} className="px-4 py-2 text-sm bg-yellow-500 text-white rounded-xl hover:bg-yellow-600 flex items-center gap-1 font-bold shadow-sm transition-colors">
+                                    <Save size={16}/> 保存笔记
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-gray-800 text-[15px] whitespace-pre-wrap leading-relaxed">
+                            {currentNote.user_note ? (
+                              currentNote.user_note 
+                            ) : (
+                              <span className="text-yellow-600/50 italic text-sm">暂无笔记，好记性不如烂笔头，随时记录你的灵光一闪吧~</span>
+                            )}
+                        </div>
+                    )}
+                 </div>
+                 {/* ✨✨✨ 笔记模块结束 ✨✨✨ */}
 
                  {/* --- 举一反三模块 --- */}
                  <div className="mt-8 pt-6 border-t border-blue-100">
@@ -307,27 +346,16 @@ ${currentNote.question}`;
                           <Sparkles size={18} /> AI 变式训练
                           <button onClick={handleGenerateSimilar} className="ml-auto text-purple-400 hover:text-purple-600" title="换一题"><RefreshCw size={14} /></button>
                         </div>
-                        
-                        {/* AI 变式题题目 */}
                         <div className="text-gray-800 font-medium mb-4 markdown-body">
-                          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                            {generatedQA.question}
-                          </ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{generatedQA.question}</ReactMarkdown>
                         </div>
-
-                        {/* ✨ AI 变式题解析：按需显示 */}
                         {!showGeneratedAnswer ? (
-                          <button 
-                            onClick={() => setShowGeneratedAnswer(true)}
-                            className="w-full py-2.5 bg-white border border-purple-200 text-purple-600 hover:bg-purple-100 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 shadow-sm"
-                          >
+                          <button onClick={() => setShowGeneratedAnswer(true)} className="w-full py-2.5 bg-white border border-purple-200 text-purple-600 hover:bg-purple-100 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 shadow-sm">
                             <Eye size={16} /> 查看变式题解析
                           </button>
                         ) : (
                           <div className="bg-white p-4 rounded-lg border border-purple-100 text-sm text-gray-600 markdown-body animate-in slide-in-from-top-2 fade-in">
-                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                              {generatedQA.answer}
-                            </ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{generatedQA.answer}</ReactMarkdown>
                           </div>
                         )}
                       </div>
@@ -343,7 +371,6 @@ ${currentNote.question}`;
          )}
       </div>
 
-      {/* 底部评分按钮 */}
       {isFlipped && (
           <div className="mt-6 grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-4">
             <button onClick={() => handleReview("forgot")} className="flex flex-col items-center justify-center p-3 rounded-2xl bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 active:scale-95 transition-all">

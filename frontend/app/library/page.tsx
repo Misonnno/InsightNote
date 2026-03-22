@@ -4,12 +4,11 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../../supabase"; 
 import ReactMarkdown from "react-markdown";
-import { Trash2, X, Calendar, Search, Image as ImageIcon, Tag, Star, Eye, EyeOff, Lightbulb, CheckCircle2, CircleDashed } from "lucide-react";
+import { Trash2, X, Calendar, Search, Image as ImageIcon, Tag, Star, Eye, EyeOff, Lightbulb, CheckCircle2, CircleDashed, Edit3, Save } from "lucide-react";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
-// 定义错题结构
 type Note = {
   id: number;
   question: string;
@@ -19,6 +18,7 @@ type Note = {
   image_url?: string;
   tags: string[] | null;
   is_mastered?: boolean;
+  user_note?: string; // ✨ 新增字段
 };
 
 function LibraryContent() {
@@ -29,13 +29,15 @@ function LibraryContent() {
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
   const [searchTerm, setSearchTerm] = useState(initialTag);
   
-  // 收藏夹相关
   const [collections, setCollections] = useState<any[]>([]);
   const [showAddToCollectionModal, setShowAddToCollectionModal] = useState<number | null>(null);
   const [collectedIds, setCollectedIds] = useState<Set<number>>(new Set());
   const [showAnalysis, setShowAnalysis] = useState(false);
-
   const [activeTab, setActiveTab] = useState<"reviewing" | "mastered">("reviewing");
+
+  // ✨ 笔记相关状态
+  const [isEditingNote, setIsEditingNote] = useState(false);
+  const [tempNoteText, setTempNoteText] = useState("");
 
   useEffect(() => {
     fetchData();
@@ -44,15 +46,9 @@ function LibraryContent() {
   const fetchData = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
-      // 获取错题
-      const { data: notesData } = await supabase
-        .from("notes")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .order("created_at", { ascending: false });
+      const { data: notesData } = await supabase.from("notes").select("*").eq("user_id", session.user.id).order("created_at", { ascending: false });
       if (notesData) setNotes(notesData);
 
-      // 获取收藏夹数据
       const { data: collectionData } = await supabase.from("collections").select("*").eq("user_id", session.user.id);
       if (collectionData) setCollections(collectionData);
 
@@ -83,6 +79,27 @@ function LibraryContent() {
   const openNoteDetail = (note: Note) => {
     setSelectedNote(note);
     setShowAnalysis(false); 
+    setIsEditingNote(false); // 打开新详情时，重置笔记编辑状态
+  };
+
+  // ✨ 保存笔记
+  const handleSaveNote = async () => {
+    if (!selectedNote) return;
+
+    const { error } = await supabase
+      .from("notes")
+      .update({ user_note: tempNoteText })
+      .eq("id", selectedNote.id);
+
+    if (error) {
+      alert("保存笔记失败：" + error.message);
+    } else {
+      // 更新状态，保持弹窗依然打开且展示新数据
+      const updatedNote = { ...selectedNote, user_note: tempNoteText };
+      setSelectedNote(updatedNote);
+      setNotes(notes.map(n => n.id === selectedNote.id ? updatedNote : n));
+      setIsEditingNote(false);
+    }
   };
 
   const filteredNotes = notes.filter(note => {
@@ -105,23 +122,11 @@ function LibraryContent() {
       </div>
 
       <div className="flex gap-4 mb-6 border-b border-gray-200">
-        <button 
-            onClick={() => setActiveTab("reviewing")}
-            className={`pb-3 px-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === "reviewing" ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}
-        >
-            <CircleDashed size={16} /> 复习中
-            <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs">
-                {notes.filter(n => !n.is_mastered).length}
-            </span>
+        <button onClick={() => setActiveTab("reviewing")} className={`pb-3 px-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === "reviewing" ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+            <CircleDashed size={16} /> 复习中 <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs">{notes.filter(n => !n.is_mastered).length}</span>
         </button>
-        <button 
-            onClick={() => setActiveTab("mastered")}
-            className={`pb-3 px-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === "mastered" ? "border-green-600 text-green-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}
-        >
-            <CheckCircle2 size={16} /> 已掌握
-            <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs">
-                {notes.filter(n => n.is_mastered).length}
-            </span>
+        <button onClick={() => setActiveTab("mastered")} className={`pb-3 px-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === "mastered" ? "border-green-600 text-green-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+            <CheckCircle2 size={16} /> 已掌握 <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs">{notes.filter(n => n.is_mastered).length}</span>
         </button>
       </div>
       
@@ -132,17 +137,16 @@ function LibraryContent() {
             <div key={note.id} onClick={() => openNoteDetail(note)} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 cursor-pointer flex justify-between items-start group transition-all">
                 <div className="flex-1 min-w-0 pr-4">
                     <div className="flex items-center gap-2 mb-2">
-                        {/* ✨ 修改点：错题列表标题也套用 Markdown 解析公式，为了防止换行破坏样式使用了 components 属性 */}
                         <div className="font-bold text-gray-800 text-lg line-clamp-1 group-hover:text-blue-600 transition-colors">
-                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} components={{ p: "span" }}>
-                                {note.question}
-                            </ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} components={{ p: "span" }}>{note.question}</ReactMarkdown>
                         </div>
                         {note.image_url && <ImageIcon size={16} className="text-blue-400 flex-shrink-0" />}
                     </div>
                     <div className="flex flex-wrap gap-2 items-center">
                         {note.tags?.map(t => <span key={t} className="flex items-center gap-1 bg-blue-50 text-blue-600 text-xs px-2 py-1 rounded font-medium border border-blue-100"><Tag size={10} /> {t}</span>)}
                         <span className="text-xs text-gray-400 flex items-center gap-1"><Calendar size={12}/> {new Date(note.created_at).toLocaleDateString()}</span>
+                        {/* 列表外层展示笔记小标签 */}
+                        {note.user_note && <span className="text-xs text-yellow-600 flex items-center gap-1 bg-yellow-50 px-2 py-0.5 rounded border border-yellow-100"><Edit3 size={10}/> 有笔记</span>}
                     </div>
                 </div>
                 <div className="flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -169,15 +173,61 @@ function LibraryContent() {
              </div>
              <div className="p-6 overflow-y-auto">
                 {selectedNote.image_url && <div className="mb-6 bg-gray-50 p-3 rounded-xl border border-gray-200"><img src={selectedNote.image_url} alt="错题原图" className="w-full max-h-[400px] object-contain rounded-lg shadow-sm bg-white" /></div>}
+                
                 <div className="mb-6">
                     <h4 className="text-sm font-bold text-blue-600 mb-2 uppercase tracking-wide">题目 / Question</h4>
-                    {/* ✨ 修改点：详情弹窗里的题目套用 Markdown 解析公式 */}
                     <div className="text-gray-900 font-medium text-lg leading-relaxed bg-blue-50/50 p-4 rounded-xl border border-blue-100 whitespace-pre-wrap markdown-body">
-                        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                            {selectedNote.question}
-                        </ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{selectedNote.question}</ReactMarkdown>
                     </div>
                 </div>
+
+                {/* ✨✨✨ 新增：我的笔记模块 ✨✨✨ */}
+                <div className="mb-6 bg-yellow-50/50 border border-yellow-200 rounded-2xl p-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2 text-yellow-700 font-bold">
+                            <Edit3 size={18} /> 我的笔记 / 批注
+                        </div>
+                        {!isEditingNote && (
+                            <button 
+                              onClick={() => {
+                                setTempNoteText(selectedNote.user_note || "");
+                                setIsEditingNote(true);
+                              }} 
+                              className="text-yellow-600 hover:text-yellow-800 text-sm font-medium flex items-center gap-1 bg-yellow-100/50 px-3 py-1 rounded-full transition-colors"
+                            >
+                                <Edit3 size={14}/> {selectedNote.user_note ? "编辑笔记" : "添加笔记"}
+                            </button>
+                        )}
+                    </div>
+                    
+                    {isEditingNote ? (
+                        <div className="flex flex-col gap-3 animate-in fade-in">
+                            <textarea
+                                value={tempNoteText}
+                                onChange={(e) => setTempNoteText(e.target.value)}
+                                className="w-full p-4 border border-yellow-300 rounded-xl bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-yellow-400 min-h-[100px] resize-y shadow-inner"
+                                placeholder="随时记录你的灵光一闪..."
+                                autoFocus
+                            />
+                            <div className="flex justify-end gap-2">
+                                <button onClick={() => setIsEditingNote(false)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-xl font-medium transition-colors">取消</button>
+                                <button onClick={handleSaveNote} className="px-4 py-2 text-sm bg-yellow-500 text-white rounded-xl hover:bg-yellow-600 flex items-center gap-1 font-bold shadow-sm transition-colors">
+                                    <Save size={16}/> 保存
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-gray-800 text-[15px] whitespace-pre-wrap leading-relaxed">
+                            {selectedNote.user_note ? (
+                              selectedNote.user_note 
+                            ) : (
+                              <span className="text-yellow-600/50 italic text-sm">暂无笔记，好记性不如烂笔头~</span>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* 隐藏解析模块 */}
                 <div>
                     <div className="flex items-center justify-between mb-2"><h4 className="text-sm font-bold text-green-600 uppercase tracking-wide">AI 深度解析 / Analysis</h4><button onClick={() => setShowAnalysis(!showAnalysis)} className="flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors">{showAnalysis ? <EyeOff size={14}/> : <Eye size={14}/>}{showAnalysis ? "隐藏解析" : "查看解析"}</button></div>
                     {showAnalysis ? <div className="markdown-body bg-gray-50 p-4 rounded-xl border border-gray-100 text-gray-700 animate-in fade-in slide-in-from-top-2">
@@ -206,11 +256,7 @@ function LibraryContent() {
 
 export default function LibraryPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center text-gray-500">
-        📚 正在加载错题库...
-      </div>
-    }>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-500">📚 正在加载错题库...</div>}>
       <LibraryContent />
     </Suspense>
   );
