@@ -31,7 +31,12 @@ export default function GraphPage() {
 
   return (
     <div className="max-w-5xl mx-auto p-6 h-[calc(100vh-100px)]">
-      <h1 className="text-2xl font-bold mb-4 text-gray-800">🌌 知识星云</h1>
+      {/* 🚨 优化标题区域：增加副标题作为操作引导，替代内部图表的重复标题 */}
+      <div className="mb-4 flex items-baseline gap-3">
+        <h1 className="text-2xl font-bold text-gray-800">🌌 知识星云</h1>
+        <span className="text-sm text-gray-500 font-medium">点击节点可直接筛选并查看相关错题</span>
+      </div>
+      
       <div className="w-full h-full">
          <KnowledgeGraph 
             notes={notes} 
