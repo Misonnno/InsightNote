@@ -256,7 +256,7 @@ export default function Home() {
           <BrainCircuit className="text-blue-600 w-10 h-10" />
           InsightNote AI 助手
         </h1>
-        <p className="text-gray-500">Gemini 1.5 Flash 强力驱动</p>
+        <p className="text-gray-500">Gemini 2.5 Flash 强力驱动</p>
       </div>
 
       <div className="w-full max-w-3xl space-y-6">
